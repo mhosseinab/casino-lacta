@@ -38,6 +38,26 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.py == 'true' }}
     runs-on: ubuntu-latest
+    # The DB-backed suite (ledger/bet_loop/fairness) runs against a REAL Postgres
+    # migrated by alembic — the SYSTEM user + house-GOLD wallet exist ONLY via the
+    # data migration (no create_all). Provide the service + DSN + migrate step, or
+    # every DB test errors. (rtp-gate stays DB-free — its sims are engine-pure.)
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lacta
+          POSTGRES_PASSWORD: lacta
+          POSTGRES_DB: lacta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lacta"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://lacta:lacta@localhost:5432/lacta
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -47,6 +67,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy engine app verifier
       - run: uv run lint-imports
+      # Schema + SYSTEM/house seed come from migrations — a bare service is not enough.
+      - run: uv run alembic upgrade head
       - run: uv run pytest -q
 
   rtp-gate:
