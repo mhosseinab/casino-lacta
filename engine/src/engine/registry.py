@@ -29,6 +29,13 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # shared §2.4 curve, carry-forward to Crash S18); win X >= target pays target,
     # RTP = 1-edge for every target. Default edge 0.01.
     "originals.limbo": ("engine.games.limbo", GameConfig(edge=0.01, params={})),
+    # Pocket Dice (spec §A.2): bet on the sum of 2d6 (2-12), OVER/UNDER a target;
+    # multiplier = (1-edge)/p from the triangular pmf, RTP = 1-edge every target.
+    # Default edge 0.01 mirrors the sibling originals.* GameConfig rows.
+    "originals.pocketdice": (
+        "engine.games.pocketdice",
+        GameConfig(edge=0.01, params={}),
+    ),
 }
 
 
