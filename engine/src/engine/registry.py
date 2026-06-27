@@ -2,10 +2,46 @@
 
 The OCP seam: a new game is a registry entry + a conforming outcome function; the
 bet loop, ledger, and API never change. DB GameConfig/GameLimit are authoritative at
-runtime; these are the defaults/seed values. Empty until the first game lands. §3.
+runtime; these are the defaults/seed values. §3.
+
+Each registered module exposes a module-level ``GAME`` singleton conforming to
+``engine.types.InstantGame`` / ``StatefulGame``; :func:`load_game` resolves it by
+dotted path so the bet loop never imports a concrete game.
 """
 
-from engine.types import GameConfig
+from __future__ import annotations
+
+import importlib
+from typing import cast
+
+from engine.types import GameConfig, InstantGame, StatefulGame
 
 # id -> (dotted module path of the game's outcome impl, default GameConfig)
-REGISTRY: dict[str, tuple[str, GameConfig]] = {}
+REGISTRY: dict[str, tuple[str, GameConfig]] = {
+    # A trivial 50/50 paying 1.98x → 0.99 RTP (1% edge). A test fixture that
+    # exercises the shared bet loop end to end; distinct from the user-facing
+    # originals.coinflip shipped in S17 (they coexist by design).
+    "stub.coinflip": ("engine.games.stub_coinflip", GameConfig(edge=0.01, params={})),
+}
+
+
+class UnknownGame(KeyError):
+    """No registry entry for the given game id."""
+
+
+def default_config(game_id: str) -> GameConfig:
+    """The engine default/seed ``GameConfig`` for ``game_id`` (DB is authoritative at runtime)."""
+    try:
+        return REGISTRY[game_id][1]
+    except KeyError as exc:
+        raise UnknownGame(game_id) from exc
+
+
+def load_game(game_id: str) -> InstantGame | StatefulGame:
+    """Resolve the registered game's ``GAME`` singleton by its dotted module path."""
+    try:
+        module_path = REGISTRY[game_id][0]
+    except KeyError as exc:
+        raise UnknownGame(game_id) from exc
+    module = importlib.import_module(module_path)
+    return cast("InstantGame | StatefulGame", module.GAME)

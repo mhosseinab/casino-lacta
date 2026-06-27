@@ -1,0 +1,131 @@
+"""Generic game endpoints (spec §2.10 envelope):
+
+    POST /games/{gameId}/bet      → single instant bet (debit → outcome → credit)
+    POST /games/{gameId}/action   → reveal/step/cashout (stateful — wired in S12+)
+    GET  /games/{gameId}/state    → current/last round (resume after reconnect)
+
+The router is transport-only: it shapes the request, delegates to the shared bet
+loop, and maps domain errors to HTTP status. There is NO per-game code here (OCP)
+and NO outcome/balance logic (server-authoritative).
+
+Auth lands in S8; until then the caller passes ``userId`` in the request body.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.db.models import Bet, GameRound
+from app.db.session import make_engine, make_session_factory
+from app.games import (
+    ActiveRoundExists,
+    BetObject,
+    GameDisabled,
+    RgDenied,
+    StakeOutOfRange,
+    place_bet,
+)
+from app.wallet import InsufficientFunds, Ledger, WalletNotFound
+from engine.registry import UnknownGame
+
+router = APIRouter(prefix="/games", tags=["games"])
+
+_DEFAULT_DB_URL = "postgresql+asyncpg://lacta:lacta@localhost:5432/lacta"
+
+
+class _Runtime:
+    """Per-process DB seam (session factory + ledger), built lazily so importing
+    the app needs no live DB (the health probe / unit imports stay DB-free)."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self.session_factory = session_factory
+        self.ledger = Ledger(session_factory)
+
+
+def _runtime(request: Request) -> _Runtime:
+    rt: _Runtime | None = getattr(request.app.state, "games_runtime", None)
+    if rt is None:
+        url = os.environ.get("DATABASE_URL", _DEFAULT_DB_URL)
+        rt = _Runtime(make_session_factory(make_engine(url)))
+        request.app.state.games_runtime = rt
+    return rt
+
+
+class BetRequest(BaseModel):
+    """The /bet intent. The client sends ONLY intent + stake; never an outcome."""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
+    bet_id: str
+    user_id: str
+    stake_minor: int
+    currency: str = "GOLD"
+    mode: str = "PLAY"
+    input: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/{game_id}/bet", response_model=BetObject)
+async def post_bet(game_id: str, body: BetRequest, request: Request) -> BetObject:
+    rt = _runtime(request)
+    try:
+        return await place_bet(
+            rt.session_factory,
+            rt.ledger,
+            user_id=body.user_id,
+            game_id=game_id,
+            bet_id=body.bet_id,
+            stake_minor=body.stake_minor,
+            currency=body.currency,
+            mode=body.mode,
+            input=body.input,
+        )
+    except UnknownGame as exc:
+        raise HTTPException(status_code=404, detail=f"unknown game {game_id}") from exc
+    except StakeOutOfRange as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (GameDisabled, ActiveRoundExists) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RgDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except InsufficientFunds as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    except WalletNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/{game_id}/action")
+async def post_action(game_id: str, request: Request) -> dict[str, str]:
+    # Stateful step/reveal/cashout — wired by the stateful path in S12+.
+    raise HTTPException(status_code=501, detail=f"no stateful actions for {game_id} yet")
+
+
+@router.get("/{game_id}/state")
+async def get_state(game_id: str, user_id: str, request: Request) -> dict[str, Any]:
+    """The caller's most recent round for this game (resume after reconnect)."""
+    rt = _runtime(request)
+    async with rt.session_factory() as session:
+        round_row = await session.scalar(
+            select(GameRound)
+            .join(Bet, Bet.round_id == GameRound.id)
+            .where(Bet.user_id == user_id, GameRound.game_id == game_id)
+            .order_by(GameRound.created_at.desc())
+            .limit(1)
+        )
+    if round_row is None:
+        raise HTTPException(status_code=404, detail="no round for this user/game")
+    return {
+        "roundId": round_row.id,
+        "gameId": round_row.game_id,
+        "status": round_row.status,
+        "nonce": round_row.nonce,
+        "configVersion": round_row.config_version,
+        "input": round_row.input,
+        "outcome": round_row.outcome,
+    }
