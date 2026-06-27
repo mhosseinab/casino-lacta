@@ -15,7 +15,6 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
-from app.api.games import _runtime  # shared lazy DB runtime (same app.state seam)
 from app.auth.service import GUEST_CURRENCY, GUEST_MODE
 from app.auth.tokens import AuthError, decode_token
 from app.db.models import User, Wallet
@@ -45,6 +44,11 @@ async def get_current_user(
         user_id = decode_token(credentials.credentials, expected_type="access")
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    # Imported lazily: the game router depends on this dependency, so a module-level
+    # import here would be a cycle (api.games → auth.deps → api.games). Same
+    # app.state DB seam, resolved at call time.
+    from app.api.games import _runtime
 
     rt = _runtime(request)
     async with rt.session_factory() as session:

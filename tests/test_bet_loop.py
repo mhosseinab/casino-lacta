@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import secrets
+from collections.abc import Iterator
 from uuid import uuid4
 
 import httpx
@@ -31,6 +32,8 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.games import _Runtime
+from app.auth.tokens import create_access_token
 from app.db.models import (
     AuditEvent,
     Bet,
@@ -51,6 +54,22 @@ from engine.rng import create_rng
 
 GAME_ID = "stub.coinflip"
 CLIENT_SEED = "test-client-seed"
+
+
+@pytest.fixture
+def jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Throwaway HS256 signing key for minting test access tokens (never in source)."""
+    monkeypatch.setenv("JWT_SECRET", "test-signing-key-not-for-prod-0123456789abcdef")
+
+
+@pytest.fixture
+def app_runtime(session_factory: async_sessionmaker[AsyncSession]) -> Iterator[None]:
+    """Point the app's lazy DB runtime at the TEST's session factory so HTTP-level
+    routes (auth dependency + bet loop) share the test's loop/engine."""
+    prev = getattr(app.state, "games_runtime", None)
+    app.state.games_runtime = _Runtime(session_factory)
+    yield
+    app.state.games_runtime = prev
 
 
 def _winning_nonce(server_seed: bytes, client_seed: str, *, want_win: bool) -> int:
@@ -286,18 +305,24 @@ async def test_one_active_round_guard_blocks_second_round(
 async def test_bet_endpoint_places_bet_end_to_end(
     ledger: Ledger,
     session_factory: async_sessionmaker[AsyncSession],
+    app_runtime: None,
+    jwt_secret: None,
 ) -> None:
-    """Proves the generic router wiring: POST /games/{id}/bet settles a bet."""
+    """Proves the generic router wiring: POST /games/{id}/bet settles a bet.
+
+    Identity is server-authoritative (S9.5): the caller authenticates with a
+    bearer token minted for the seeded user — never a ``userId`` in the body."""
     uid, wid, _, _ = await _seed_player(session_factory, ledger, want_win=True)
     bet_id = f"bet-{uuid4().hex}"
+    token = create_access_token(uid)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             f"/games/{GAME_ID}/bet",
+            headers={"Authorization": f"Bearer {token}"},
             json={
                 "betId": bet_id,
-                "userId": uid,
                 "stakeMinor": 100,
                 "currency": "GOLD",
                 "input": {"side": "heads"},

@@ -27,6 +27,10 @@ class StubCoinflip:
 
     id: str = "stub.coinflip"
 
+    def validate_input(self, input: dict[str, Any], cfg: GameConfig) -> None:
+        """No constrained input: a fair coin accepts any (or no) ``side``. Explicit
+        empty body conforms to the ``InstantGame`` fence seam (OCP)."""
+
     def play(self, input: dict[str, Any], rng: RngStream, cfg: GameConfig) -> Outcome:
         """Resolve one fair coin flip from a single draw.
 

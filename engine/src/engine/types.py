@@ -8,6 +8,17 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 
+class InvalidBetInput(ValueError):
+    """Game-specific bet input is out of range or malformed.
+
+    Raised by :meth:`InstantGame.validate_input` at the bet-loop boundary. Raising
+    a deterministic ``ValueError`` on bad input is a PURE rejection (no IO/clock/
+    random), so it belongs in the engine; ``app/`` maps it to a 4xx at the
+    transport edge. Subclasses ``ValueError`` so generic input handling still
+    catches it.
+    """
+
+
 class RngStream(Protocol):
     """Deterministic uniform stream. Entropy enters outcome logic ONLY via this seam."""
 
@@ -36,6 +47,18 @@ class InstantGame(Protocol):
     """One-shot games resolved by a single pure call (Dice, Limbo, Keno, Roulette, slots, ...)."""
 
     id: str
+
+    def validate_input(self, input: dict[str, Any], cfg: GameConfig) -> None:
+        """The per-game input fence — pure, run at the bet-loop boundary BEFORE any
+        nonce reservation, debit, or :meth:`play`.
+
+        Raise :class:`InvalidBetInput` on out-of-range or malformed game-specific
+        input; return ``None`` when valid. Each game implements this explicitly
+        (OCP) — there is no protocol-level default, so a new game cannot silently
+        inherit a no-op fence. A game with no constrained input still conforms with
+        an empty body. Pure: stdlib + engine only, no IO/clock/random.
+        """
+        ...
 
     def play(self, input: dict[str, Any], rng: RngStream, cfg: GameConfig) -> Outcome:
         """Resolve a bet to an Outcome — pure function of (input, rng stream, cfg)."""
