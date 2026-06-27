@@ -16,6 +16,30 @@ from typing import cast
 
 from engine.types import GameConfig, InstantGame, StatefulGame
 
+# Plinko (spec §A.5) per-(rows, risk) multiplier tables — TUNED so the analytic
+# RTP ``Σ_i C(R,i)/2^R · m_i`` equals ``1 - edge`` AFTER 2-dp rounding (within
+# ±0.2% for every combo; verified by tests/test_plinko_rtp.py). Symmetric and
+# convex (high at the edges, low in the centre). Row keys are JSON strings so the
+# table survives the DB GameConfig.params round-trip unchanged. Re-tune these
+# numbers (never clamp outcomes) if the edge or supported boards change.
+_PLINKO_TABLES: dict[str, dict[str, list[float]]] = {
+    "8": {
+        "LOW": [1.62, 1.34, 1.14, 0.96, 0.82, 0.96, 1.14, 1.34, 1.62],
+        "MEDIUM": [2.6, 1.83, 1.29, 0.91, 0.64, 0.91, 1.29, 1.83, 2.6],
+        "HIGH": [5.33, 2.81, 1.46, 0.78, 0.41, 0.78, 1.46, 2.81, 5.33],
+    },
+    "12": {
+        "LOW": [1.84, 1.57, 1.37, 1.22, 1.06, 0.94, 0.82, 0.94, 1.06, 1.22, 1.37, 1.57, 1.84],
+        "MEDIUM": [3.46, 2.59, 1.96, 1.49, 1.12, 0.86, 0.65, 0.86, 1.12, 1.49, 1.96, 2.59, 3.46],
+        "HIGH": [9.62, 5.67, 3.35, 1.96, 1.16, 0.68, 0.4, 0.68, 1.16, 1.96, 3.35, 5.67, 9.62],
+    },
+    "16": {
+        "LOW": [1.96, 1.74, 1.54, 1.42, 1.26, 1.15, 1.03, 0.92, 0.83, 0.92, 1.03, 1.15, 1.26, 1.42, 1.54, 1.74, 1.96],  # noqa: E501
+        "MEDIUM": [4.19, 3.36, 2.65, 2.09, 1.66, 1.31, 1.05, 0.83, 0.66, 0.83, 1.05, 1.31, 1.66, 2.09, 2.65, 3.36, 4.19],  # noqa: E501
+        "HIGH": [13.99, 9.05, 5.83, 3.77, 2.41, 1.57, 1.01, 0.65, 0.42, 0.65, 1.01, 1.57, 2.41, 3.77, 5.83, 9.05, 13.99],  # noqa: E501
+    },
+}
+
 # id -> (dotted module path of the game's outcome impl, default GameConfig)
 REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # A trivial 50/50 paying 1.98x → 0.99 RTP (1% edge). A test fixture that
@@ -29,6 +53,13 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # shared §2.4 curve, carry-forward to Crash S18); win X >= target pays target,
     # RTP = 1-edge for every target. Default edge 0.01.
     "originals.limbo": ("engine.games.limbo", GameConfig(edge=0.01, params={})),
+    # Plinko (spec §A.5): R rows of pegs → bin ~ Binomial(R,½); bin indexes a tuned
+    # per-(rows,risk) multiplier table (Σ P(i)·m_i = 1-edge post-rounding). Default
+    # edge 0.01; tables carried in params (config, not literals in play()).
+    "originals.plinko": (
+        "engine.games.plinko",
+        GameConfig(edge=0.01, params={"tables": _PLINKO_TABLES}),
+    ),
 }
 
 
