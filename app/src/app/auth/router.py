@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from app.api.games import _runtime
 from app.auth.deps import CurrentUser, get_current_user
 from app.auth.service import GUEST_CURRENCY, GUEST_MODE, create_guest
 from app.auth.tokens import (
@@ -64,6 +63,10 @@ class MeResponse(_Camel):
 
 @router.post("/guest", response_model=GuestSessionResponse)
 async def post_guest(request: Request) -> GuestSessionResponse:
+    # Lazy import: the game router now depends on the auth dependency, so a
+    # module-level import of api.games here would be a cycle. Same app.state seam.
+    from app.api.games import _runtime
+
     rt = _runtime(request)
     guest = await create_guest(rt.session_factory, rt.ledger)
     return GuestSessionResponse(

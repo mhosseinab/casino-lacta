@@ -345,6 +345,12 @@ async def place_bet(
         engine_cfg = EngineConfig(edge=float(cfg_row.edge), params=dict(cfg_row.params or {}))
         existing = await session.get(Bet, bet_id)
 
+    # 1b. Per-game input fence — pure, at the boundary BEFORE any nonce reservation,
+    # debit, or play(). An out-of-range/malformed input raises InvalidBetInput and
+    # moves ZERO credits (the debit below is never reached). Same engine seam the
+    # verifier sees; the router maps the raised error to a 4xx.
+    cast(InstantGame, game).validate_input(bet_input, engine_cfg)
+
     # 2. Idempotent replay: a known bet returns the original (heals an un-credited win).
     if existing is not None:
         return await _finalize_existing(session_factory, ledger, bet_id)

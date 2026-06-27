@@ -8,7 +8,9 @@ The router is transport-only: it shapes the request, delegates to the shared bet
 loop, and maps domain errors to HTTP status. There is NO per-game code here (OCP)
 and NO outcome/balance logic (server-authoritative).
 
-Auth lands in S8; until then the caller passes ``userId`` in the request body.
+Identity is server-authoritative: it comes ONLY from the bearer token (the S8
+``get_current_user`` dependency), NEVER from the request body or query — a client
+cannot bet as, or read the state of, another user.
 """
 
 from __future__ import annotations
@@ -16,12 +18,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.auth.deps import CurrentUser, get_current_user
 from app.db.models import Bet, GameRound
 from app.db.session import make_engine, make_session_factory
 from app.games import (
@@ -34,6 +37,7 @@ from app.games import (
 )
 from app.wallet import InsufficientFunds, Ledger, WalletNotFound
 from engine.registry import UnknownGame
+from engine.types import InvalidBetInput
 
 router = APIRouter(prefix="/games", tags=["games"])
 
@@ -59,12 +63,13 @@ def _runtime(request: Request) -> _Runtime:
 
 
 class BetRequest(BaseModel):
-    """The /bet intent. The client sends ONLY intent + stake; never an outcome."""
+    """The /bet intent. The client sends ONLY intent + stake; never an outcome and
+    never an identity — ``userId`` is intentionally absent (it comes from the token,
+    so a client cannot even express acting as another user)."""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
     bet_id: str
-    user_id: str
     stake_minor: int
     currency: str = "GOLD"
     mode: str = "PLAY"
@@ -72,13 +77,18 @@ class BetRequest(BaseModel):
 
 
 @router.post("/{game_id}/bet", response_model=BetObject)
-async def post_bet(game_id: str, body: BetRequest, request: Request) -> BetObject:
+async def post_bet(
+    game_id: str,
+    body: BetRequest,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+) -> BetObject:
     rt = _runtime(request)
     try:
         return await place_bet(
             rt.session_factory,
             rt.ledger,
-            user_id=body.user_id,
+            user_id=current.user_id,  # server-authoritative identity (from the token)
             game_id=game_id,
             bet_id=body.bet_id,
             stake_minor=body.stake_minor,
@@ -88,6 +98,8 @@ async def post_bet(game_id: str, body: BetRequest, request: Request) -> BetObjec
         )
     except UnknownGame as exc:
         raise HTTPException(status_code=404, detail=f"unknown game {game_id}") from exc
+    except InvalidBetInput as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except StakeOutOfRange as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (GameDisabled, ActiveRoundExists) as exc:
@@ -101,20 +113,31 @@ async def post_bet(game_id: str, body: BetRequest, request: Request) -> BetObjec
 
 
 @router.post("/{game_id}/action")
-async def post_action(game_id: str, request: Request) -> dict[str, str]:
-    # Stateful step/reveal/cashout — wired by the stateful path in S12+.
+async def post_action(
+    game_id: str,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+) -> dict[str, str]:
+    # Stateful step/reveal/cashout — wired by the stateful path in S12+. Auth is
+    # enforced now so the seam is identity-safe the moment it is implemented.
     raise HTTPException(status_code=501, detail=f"no stateful actions for {game_id} yet")
 
 
 @router.get("/{game_id}/state")
-async def get_state(game_id: str, user_id: str, request: Request) -> dict[str, Any]:
-    """The caller's most recent round for this game (resume after reconnect)."""
+async def get_state(
+    game_id: str,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """The caller's most recent round for this game (resume after reconnect).
+
+    Identity is the token's user — a caller can only read its OWN round."""
     rt = _runtime(request)
     async with rt.session_factory() as session:
         round_row = await session.scalar(
             select(GameRound)
             .join(Bet, Bet.round_id == GameRound.id)
-            .where(Bet.user_id == user_id, GameRound.game_id == game_id)
+            .where(Bet.user_id == current.user_id, GameRound.game_id == game_id)
             .order_by(GameRound.created_at.desc())
             .limit(1)
         )
