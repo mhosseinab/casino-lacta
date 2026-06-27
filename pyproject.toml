@@ -40,6 +40,11 @@ src = ["engine/src", "app/src", "verifier/src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are intentionally evaluated as argument defaults —
+# the framework contract, not the B008 anti-pattern. Treat them as immutable calls.
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
