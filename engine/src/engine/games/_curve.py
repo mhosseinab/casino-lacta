@@ -18,9 +18,19 @@ import math
 # whole "centi-multiplier", then scaled back — so X is always a clean N.NN value.
 _CENTI = 100
 
-# The curve's lower clamp: X never drops below 1.00×. At f = 0 the raw ratio is
-# (1 − edge) < 1, so the floor would yield < 1.00; clamping realises the house
-# edge as the instant-bust mass P(X = 1.00) = edge (spec §A.4 "instant-bust").
+# The curve's lower clamp: X never drops below 1.00×. Two DISTINCT masses sit at
+# the bottom — do not conflate them (this matters for the S18 Crash carry-forward,
+# which decides what to test against `edge`):
+#   * Continuous clamp mass — raw = (1 − edge)/(1 − f) < 1.00  ⟺  f < edge — has
+#     probability exactly `edge`. THIS is the spec §A.4 "instant-bust rate ≈ edge":
+#     the house edge realised as the fraction of draws whose raw ratio falls below
+#     1.00× (equivalently P(raw < 1.00) = P(f < edge) = edge).
+#   * Floored mass at EXACTLY 1.00 — because floor(raw*100)/100 == 1.00 for every
+#     raw ∈ [1.00, 1.01), X == 1.00 whenever raw < 1.01  ⟺  f < 1 − (1 − edge)/1.01,
+#     so P(X == 1.00) = 1 − (1 − edge)/1.01 ≈ 2·edge (≈ 0.0198 at edge = 0.01).
+# So an empirical P(X == 1.00) measures ≈ 2·edge, NOT `edge`. To test the
+# instant-bust RATE against `edge`, measure the continuous P(f < edge) =
+# P(raw < 1.00), never the floored P(X == 1.00).
 _FLOOR = 1.00
 
 
