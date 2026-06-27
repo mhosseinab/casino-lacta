@@ -50,3 +50,10 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Heavy RTP sims (1e7–1e8) are excluded from the default/PR run; the dedicated CI
+# `rtp-gate` job opts back in with `-m rtp_heavy` (the last `-m` wins). The fast
+# ~1e6 RTP subset is unmarked, so it runs on every `pytest`.
+addopts = "-m 'not rtp_heavy'"
+markers = [
+    "rtp_heavy: heavy RTP sims (1e7–1e8 trials) — nightly/manual rtp-gate job only",
+]
