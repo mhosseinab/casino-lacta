@@ -13,6 +13,7 @@ dependencies = [
     "redis>=5",
     "psycopg[binary]>=3.3.4",
     "asyncpg>=0.31.0",
+    "pyjwt>=2.9",
 ]
 
 [tool.uv.sources]
