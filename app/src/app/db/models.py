@@ -88,6 +88,13 @@ class LedgerEntry(Base):
     delta_minor: Mapped[int] = mapped_column(BigInteger)
     balance_after: Mapped[int] = mapped_column(BigInteger)
     ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # DB-level idempotency fence (§2.2): the player-side row of an op carries the
+    # op's idempotency key; the house-side row leaves it NULL. The UNIQUE
+    # constraint (multiple NULLs permitted in Postgres) is the authority — a
+    # replayed key cannot insert a second balanced set, so an op applies once.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(128), unique=True, nullable=True
+    )
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
