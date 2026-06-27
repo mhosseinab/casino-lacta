@@ -36,6 +36,22 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
         "engine.games.pocketdice",
         GameConfig(edge=0.01, params={}),
     ),
+    # Roulette 0–99 (spec §A.9): one draw → result = floor(f·100); map result→colour
+    # via the configurable `pockets` table (1 green / 49 red / 50 black default);
+    # each placed colour bet pays (1-edge)/p, per-bet RTP = 1-edge. Default edge 0.01.
+    "originals.roulette": (
+        "engine.games.roulette99",
+        GameConfig(
+            edge=0.01,
+            params={
+                "pockets": {
+                    "GREEN": [0],
+                    "RED": list(range(1, 50)),
+                    "BLACK": list(range(50, 100)),
+                }
+            },
+        ),
+    ),
 }
 
 
