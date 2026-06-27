@@ -60,7 +60,9 @@ jobs:
           enable-cache: true
       - run: uv sync
       # RTP-as-CI gate: a game ships only when its RTP/EV test is wired here.
-      # Placeholder until S7 wires the first real RTP test — at S1 no rtp tests
-      # exist, so collection yields pytest exit 5 ("no tests collected"); tolerate
-      # only that exit code so the empty gate stays green without weakening it.
-      - run: uv run pytest -q tests -k rtp --co || [ $? -eq 5 ]
+      # The heavy sims (1e7–1e8 trials) are marked `rtp_heavy` and excluded from
+      # the default PR `pytest` run (pyproject addopts); this dedicated job opts
+      # back in with `-m rtp_heavy` (the last `-m` wins). These tests are
+      # engine-pure (no DB), so the job needs no Postgres service. New games
+      # append their heavy RTP test under the same marker.
+      - run: uv run pytest -q -m rtp_heavy

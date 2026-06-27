@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Provably-Fair Verifier · casino-lacta</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; }
+  label { display: block; margin: 0.75rem 0 0.2rem; font-weight: 600; }
+  input { width: 100%; padding: 0.4rem 0.5rem; box-sizing: border-box; font: inherit; }
+  button { margin-top: 1rem; padding: 0.5rem 1rem; font: inherit; cursor: pointer; }
+  code, pre { font-family: ui-monospace, monospace; }
+  pre { background: rgba(127,127,127,0.12); padding: 0.75rem; overflow-x: auto; border-radius: 4px; }
+  .note { font-size: 0.85rem; opacity: 0.8; }
+  table { border-collapse: collapse; margin-top: 0.5rem; }
+  td, th { border: 1px solid rgba(127,127,127,0.4); padding: 0.25rem 0.6rem; text-align: left; }
+</style>
+</head>
+<body>
+<h1>Provably-Fair Verifier</h1>
+<p class="note">
+  Recomputes the uniform random stream behind a bet from its revealed seeds —
+  <code>bytes = HMAC_SHA256(serverSeed, "clientSeed:nonce:cursor")</code>,
+  <code>float = uint32(bytes[0..4], big-endian) / 2³²</code> — the exact
+  derivation the server runs (<code>engine/src/engine/rng.py</code>).
+</p>
+<p class="note">
+  This page reproduces the shared <strong>float stream</strong> (the load-bearing
+  primitive). The per-game mapping from those floats to a payout lives in the
+  <strong>Python reference</strong> (<code>verifier/</code>), which imports the
+  server's <code>engine/</code> verbatim — that module is the authoritative,
+  parity-guaranteed verifier. For Crash <em>round mode</em>, set
+  <em>clientSeed = roundId</em> and <em>nonce = roundNumber</em> (cursor 0).
+</p>
+
+<label for="serverSeed">serverSeed <span class="note">(hex, revealed after rotation)</span></label>
+<input id="serverSeed" placeholder="e.g. 9f86d081…" />
+
+<label for="clientSeed">clientSeed <span class="note">(or roundId for Crash)</span></label>
+<input id="clientSeed" />
+
+<label for="nonce">nonce <span class="note">(or roundNumber for Crash)</span></label>
+<input id="nonce" type="number" value="0" />
+
+<label for="count">draws to show</label>
+<input id="count" type="number" value="8" min="1" max="64" />
+
+<button id="go">Verify → recompute floats</button>
+
+<div id="commitment"></div>
+<div id="output"></div>
+
+<script>
+function hexToBytes(hex) {
+  const clean = hex.trim().replace(/^0x/, "");
+  if (clean.length % 2 !== 0) throw new Error("serverSeed hex must have an even length");
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+  return out;
+}
+function bytesToHex(buf) {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hmacFloat(keyBytes, message) {
+  const key = await crypto.subtle.importKey(
+    "raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  // First 4 bytes, big-endian, / 2^32 — identical to engine.rng.HmacRngStream.
+  const u32 = new DataView(sig).getUint32(0, /* littleEndian = */ false);
+  return u32 / 2 ** 32;
+}
+
+async function sha256Hex(bytes) {
+  return bytesToHex(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+async function verify() {
+  const out = document.getElementById("output");
+  const commit = document.getElementById("commitment");
+  out.textContent = "";
+  commit.textContent = "";
+  try {
+    const serverSeed = hexToBytes(document.getElementById("serverSeed").value);
+    const clientSeed = document.getElementById("clientSeed").value;
+    const nonce = parseInt(document.getElementById("nonce").value, 10);
+    const count = Math.min(64, Math.max(1, parseInt(document.getElementById("count").value, 10)));
+
+    commit.innerHTML = "<p class='note'>serverSeedHash = SHA256(serverSeed) = <code>" +
+      (await sha256Hex(serverSeed)) + "</code><br>Compare this to the commitment shown before the bet.</p>";
+
+    let rows = "<table><tr><th>cursor</th><th>float [0,1)</th></tr>";
+    for (let cursor = 0; cursor < count; cursor++) {
+      const f = await hmacFloat(serverSeed, clientSeed + ":" + nonce + ":" + cursor);
+      rows += "<tr><td>" + cursor + "</td><td>" + f.toFixed(12) + "</td></tr>";
+    }
+    rows += "</table>";
+    out.innerHTML = rows;
+  } catch (err) {
+    out.innerHTML = "<pre>Error: " + err.message + "</pre>";
+  }
+}
+
+// Prefill from query params (the /fairness verifier link), then auto-run if a seed is present.
+const q = new URLSearchParams(location.search);
+for (const [param, id] of [["serverSeed", "serverSeed"], ["clientSeed", "clientSeed"], ["nonce", "nonce"]]) {
+  if (q.has(param)) document.getElementById(id).value = q.get(param);
+}
+document.getElementById("go").addEventListener("click", verify);
+if (q.get("serverSeed")) verify();
+</script>
+</body>
+</html>
