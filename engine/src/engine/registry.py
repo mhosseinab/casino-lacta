@@ -25,6 +25,10 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # Dice (spec §A.1): UNDER/OVER a target; multiplier = (1-edge)/p, RTP = 1-edge.
     # Default edge 0.01 mirrors the seeded originals.dice GameConfig row (S2).
     "originals.dice": ("engine.games.dice", GameConfig(edge=0.01, params={})),
+    # Limbo (spec §A.3): pick a target multiplier; X = crash_point(f, edge) (the
+    # shared §2.4 curve, carry-forward to Crash S18); win X >= target pays target,
+    # RTP = 1-edge for every target. Default edge 0.01.
+    "originals.limbo": ("engine.games.limbo", GameConfig(edge=0.01, params={})),
 }
 
 
