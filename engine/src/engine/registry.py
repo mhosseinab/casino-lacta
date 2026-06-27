@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib
 from typing import cast
 
+from engine.games.keno import default_params as _keno_default_params
 from engine.types import GameConfig, InstantGame, StatefulGame
 
 # Plinko (spec §A.5) per-(rows, risk) multiplier tables — TUNED so the analytic
@@ -82,6 +83,13 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     "originals.plinko": (
         "engine.games.plinko",
         GameConfig(edge=0.01, params={"tables": _PLINKO_TABLES}),
+    ),
+    # Keno (spec §A.8): pick 1–10 of 1–40; draw 10; hypergeometric hits → a tuned
+    # per-(picks, risk) payout table (in params, configurable) with Σ P(h)·pay_h =
+    # 1-edge. Default edge 0.01; default tables seeded from engine.games.keno.
+    "originals.keno": (
+        "engine.games.keno",
+        GameConfig(edge=0.01, params=_keno_default_params()),
     ),
 }
 
