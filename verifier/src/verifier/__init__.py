@@ -26,7 +26,7 @@ from urllib.parse import urlencode
 
 from engine.fairness import verify
 from engine.registry import default_config, load_game
-from engine.types import GameConfig, InstantGame, Outcome
+from engine.types import GameConfig, InstantGame, Outcome, StatefulGame
 
 # Human-readable derivation strings surfaced by GET /fairness (spec §2.10) so a
 # player can see exactly how the byte stream maps to an outcome.
@@ -73,6 +73,39 @@ def reproduce(
     )
 
 
+def reproduce_stateful_init(
+    *,
+    server_seed: bytes,
+    client_seed: str,
+    nonce: int,
+    game_id: str,
+    input: dict[str, Any] | None = None,
+    cfg: GameConfig | None = None,
+) -> dict[str, Any]:
+    """Recompute a ``StatefulGame``'s COMMITTED round-start state (e.g. the Mines mine
+    layout) from ``(serverSeed, clientSeed, nonce, input)``.
+
+    Reuses ``engine.fairness.verify`` with the registered game's ``init`` as the
+    derivation — the identical call the bet loop makes at round open — so the
+    reproduced state equals the server's bit-for-bit. Used post-reveal to prove the
+    hidden layout was fixed before any action (never moved after the player's clicks).
+    ``cfg`` defaults to the engine registry default; pass the AUDITED ``GameConfig`` to
+    reproduce a specific historical round exactly.
+    """
+    game = load_game(game_id)
+    if not hasattr(game, "init"):  # instant games replay via reproduce()
+        raise ValueError(f"{game_id!r} is not a stateful game; use reproduce()")
+    stateful = cast("StatefulGame", game)
+    config = cfg if cfg is not None else default_config(game_id)
+    game_input = dict(input or {})
+    return verify(
+        server_seed,
+        client_seed,
+        nonce,
+        lambda rng: stateful.init(game_input, rng, config),
+    )
+
+
 def reproduce_round(
     *,
     server_seed: bytes,
@@ -116,5 +149,6 @@ __all__ = [
     "USER_DERIVATION",
     "reproduce",
     "reproduce_round",
+    "reproduce_stateful_init",
     "verifier_link",
 ]

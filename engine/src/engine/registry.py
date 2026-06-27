@@ -91,6 +91,11 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
         "engine.games.keno",
         GameConfig(edge=0.01, params=_keno_default_params()),
     ),
+    # Mines (spec §A.6): the first StatefulGame. M hidden mines on a 25-cell grid,
+    # committed via sampleWithoutReplacement(25, M) at round start; after k safe
+    # reveals payout = (1-edge)·C(25,k)/C(25-M,k), so EV(cash) = 1-edge for any (M,k).
+    # M is per-bet input (not config); default edge 0.01, no game params.
+    "originals.mines": ("engine.games.mines", GameConfig(edge=0.01, params={})),
 }
 
 

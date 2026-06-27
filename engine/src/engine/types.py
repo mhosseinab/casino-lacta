@@ -66,9 +66,29 @@ class InstantGame(Protocol):
 
 
 class StatefulGame(Protocol):
-    """Multi-step games with server-held state (Mines, HiLo, Crash-bet, Blackjack, Baccarat)."""
+    """Multi-step games with server-held state (Mines, HiLo, Crash-bet, Blackjack, Baccarat).
+
+    The state returned by :meth:`init` and advanced by :meth:`step` is OPAQUE to the
+    app: the bet loop persists it and feeds it back, never inspecting its game-specific
+    keys (redaction lives here, not in the app). The client-facing projection a step
+    surfaces is its ``Outcome.detail`` — which carries a generic ``"status"`` in
+    ``{ACTIVE, CASHED_OUT, LOST}`` (and ``Outcome.multiplier`` on settlement) so the
+    app drives credit/round-status generically, knowing nothing of the game's rules.
+    """
 
     id: str
+
+    def validate_input(self, input: dict[str, Any], cfg: GameConfig) -> None:
+        """The per-round input fence — pure, run at the bet-loop boundary BEFORE the
+        one-active-round guard, any nonce reservation, debit, or :meth:`init`.
+
+        Raise :class:`InvalidBetInput` on out-of-range or malformed round-open input
+        (e.g. Mines' mine count); return ``None`` when valid. Each stateful game
+        implements this explicitly (OCP) — there is no protocol-level default, so a
+        new game cannot silently inherit a no-op fence. Pure: stdlib + engine only,
+        no IO/clock/random. Mirrors :meth:`InstantGame.validate_input`.
+        """
+        ...
 
     def init(self, input: dict[str, Any], rng: RngStream, cfg: GameConfig) -> dict[str, Any]:
         """Commit the hidden layout from the rng stream at round start; return opaque state."""
