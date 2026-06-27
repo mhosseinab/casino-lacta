@@ -1,0 +1,52 @@
+[project]
+name = "casino-lacta"
+version = "0.0.0"
+description = "Casino (codename lacta) — play-money games layer, polyglot monorepo workspace root."
+requires-python = ">=3.12"
+dependencies = [
+    "app",
+    "verifier",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["engine", "app", "verifier"]
+
+[tool.uv.sources]
+engine = { workspace = true }
+app = { workspace = true }
+verifier = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "import-linter>=2.0",
+]
+
+# ---- Shared tooling config (every member walks up to this root) ----
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["engine/src", "app/src", "verifier/src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+mypy_path = ["engine/src", "app/src", "verifier/src"]
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

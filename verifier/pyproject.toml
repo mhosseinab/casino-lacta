@@ -1,0 +1,18 @@
+[project]
+name = "verifier"
+version = "0.0.0"
+description = "Open provably-fair verifier. Depends on engine ONLY — imports it verbatim, never reimplements."
+requires-python = ">=3.12"
+dependencies = [
+    "engine",
+]
+
+[tool.uv.sources]
+engine = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/verifier"]

@@ -1,0 +1,16 @@
+{
+  "name": "casino-lacta",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Casino (codename lacta) — TS workspace root: lefthook, biome, OpenAPI->TS contracts.",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "lefthook": "^1.7.0",
+    "openapi-typescript": "^7.4.0"
+  }
+}

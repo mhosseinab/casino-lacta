@@ -1,0 +1,22 @@
+# Cross-language git hooks (lefthook). Installed by `task setup` (pnpm exec lefthook install).
+# glob matching uses doublestar so src-layout paths match.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: ruff
+      glob: "*.py"
+      run: uv run ruff check {staged_files}
+    - name: biome
+      glob: "*.{js,ts,tsx,json}"
+      run: pnpm exec biome check --no-errors-on-unmatched {staged_files}
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: mypy
+      run: uv run mypy engine app verifier
+    - name: import-linter
+      run: uv run lint-imports
+    - name: pytest
+      run: uv run pytest -q

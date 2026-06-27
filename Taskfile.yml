@@ -1,0 +1,61 @@
+version: "3"
+
+# Cross-language entry points for the polyglot monorepo (uv + pnpm).
+# See docs/2026-06-27_casino-games_monorepo-blueprint.md §8.
+
+tasks:
+  doctor:
+    desc: Verify required tooling is present (uv, pnpm, node, docker, Task) + lefthook via pnpm.
+    silent: true
+    cmds:
+      - |
+        ok=0
+        for bin in uv pnpm node docker task; do
+          if command -v "$bin" >/dev/null 2>&1; then
+            printf 'OK   %-7s %s\n' "$bin" "$(command -v "$bin")"
+          else
+            printf 'MISS %-7s (not on PATH)\n' "$bin"; ok=1
+          fi
+        done
+        if pnpm exec lefthook version >/dev/null 2>&1; then
+          printf 'OK   %-7s (pnpm exec lefthook)\n' "lefthook"
+        else
+          printf 'MISS %-7s (run: task setup)\n' "lefthook"
+        fi
+        exit $ok
+
+  setup:
+    desc: Bootstrap the workspace — uv sync (dev) + pnpm install + lefthook git hooks.
+    cmds:
+      - uv sync
+      - pnpm install
+      - pnpm exec lefthook install
+
+  dev:
+    desc: Local dev — postgres + redis via compose, then the API with reload.
+    cmds:
+      - docker compose up -d postgres redis
+      - uv run uvicorn app.main:app --reload --app-dir app/src
+
+  lint:
+    desc: ruff + mypy (strict) + import-linter (Python) + biome (TS).
+    cmds:
+      - uv run ruff check .
+      - uv run mypy engine app verifier
+      - uv run lint-imports
+      - pnpm exec biome check .
+
+  test:
+    desc: Python test suite (vitest wired when client lands).
+    cmds:
+      - uv run pytest -q
+
+  contracts:
+    desc: Regenerate packages/contracts-ts from the API OpenAPI schema (wired in a later step).
+    cmds:
+      - echo "contracts generation is wired in a later step"
+
+  rtp:
+    desc: The heavy RTP-as-CI gate (wired when the first game lands).
+    cmds:
+      - uv run pytest -q tests -k rtp

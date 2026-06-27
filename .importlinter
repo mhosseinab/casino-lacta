@@ -1,0 +1,33 @@
+[importlinter]
+root_packages =
+    engine
+    app
+    verifier
+include_external_packages = True
+
+[importlinter:contract:engine-is-pure]
+name = engine imports only stdlib + engine
+type = forbidden
+source_modules =
+    engine
+forbidden_modules =
+    app
+    verifier
+    fastapi
+    sqlalchemy
+    redis
+    httpx
+    random
+    secrets
+    time
+    datetime
+    os
+    asyncio
+    pathlib
+
+[importlinter:contract:layering]
+name = app/verifier may depend on engine, never the reverse
+type = layers
+layers =
+    app | verifier
+    engine

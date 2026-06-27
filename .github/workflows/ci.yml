@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: ["casino-games/main", "master"]
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      py: ${{ steps.filter.outputs.py }}
+      ts: ${{ steps.filter.outputs.ts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            py:
+              - 'engine/**'
+              - 'app/**'
+              - 'verifier/**'
+              - 'tests/**'
+              - 'migrations/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.importlinter'
+              - '.github/workflows/ci.yml'
+            ts:
+              - 'client/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'biome.json'
+
+  python:
+    needs: changes
+    if: ${{ needs.changes.outputs.py == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run mypy engine app verifier
+      - run: uv run lint-imports
+      - run: uv run pytest -q
+
+  rtp-gate:
+    needs: changes
+    if: ${{ needs.changes.outputs.py == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      # RTP-as-CI gate: a game ships only when its RTP/EV test is wired here.
+      # Placeholder until S7 wires the first real RTP test — at S1 no rtp tests
+      # exist, so collection yields pytest exit 5 ("no tests collected"); tolerate
+      # only that exit code so the empty gate stays green without weakening it.
+      - run: uv run pytest -q tests -k rtp --co || [ $? -eq 5 ]

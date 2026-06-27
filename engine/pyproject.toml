@@ -1,0 +1,13 @@
+[project]
+name = "engine"
+version = "0.0.0"
+description = "Pure outcome logic — stdlib only. Purity is a dependency fact (no framework/IO/clock/random)."
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engine"]
