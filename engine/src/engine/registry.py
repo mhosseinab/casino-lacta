@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib
 from typing import cast
 
+from engine.games.keno import default_params as _keno_default_params
 from engine.types import GameConfig, InstantGame, StatefulGame
 
 # id -> (dotted module path of the game's outcome impl, default GameConfig)
@@ -29,6 +30,13 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # shared §2.4 curve, carry-forward to Crash S18); win X >= target pays target,
     # RTP = 1-edge for every target. Default edge 0.01.
     "originals.limbo": ("engine.games.limbo", GameConfig(edge=0.01, params={})),
+    # Keno (spec §A.8): pick 1–10 of 1–40; draw 10; hypergeometric hits → a tuned
+    # per-(picks, risk) payout table (in params, configurable) with Σ P(h)·pay_h =
+    # 1-edge. Default edge 0.01; default tables seeded from engine.games.keno.
+    "originals.keno": (
+        "engine.games.keno",
+        GameConfig(edge=0.01, params=_keno_default_params()),
+    ),
 }
 
 
