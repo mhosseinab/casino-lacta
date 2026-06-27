@@ -22,6 +22,9 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # exercises the shared bet loop end to end; distinct from the user-facing
     # originals.coinflip shipped in S17 (they coexist by design).
     "stub.coinflip": ("engine.games.stub_coinflip", GameConfig(edge=0.01, params={})),
+    # Dice (spec §A.1): UNDER/OVER a target; multiplier = (1-edge)/p, RTP = 1-edge.
+    # Default edge 0.01 mirrors the seeded originals.dice GameConfig row (S2).
+    "originals.dice": ("engine.games.dice", GameConfig(edge=0.01, params={})),
 }
 
 
