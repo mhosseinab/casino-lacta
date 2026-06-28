@@ -28,6 +28,10 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "import-linter>=2.0",
+    # Vectorized RTP sims live in tests/ ONLY (never engine/ — purity). The CI
+    # `rtp-gate` job runs `uv sync` (which installs the `dev` group by default) then
+    # `pytest -m rtp_heavy`, so numpy here is available to the gate without a ci.yml edit.
+    "numpy>=2",
 ]
 
 # ---- Shared tooling config (every member walks up to this root) ----

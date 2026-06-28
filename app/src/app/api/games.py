@@ -116,6 +116,22 @@ async def post_bet(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/{game_id}/spin", response_model=BetObject)
+async def post_spin(
+    game_id: str,
+    body: BetRequest,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+) -> BetObject:
+    """Slots spin (spec §461 ``POST /games/slots.{machineId}/spin``).
+
+    A thin synonym for ``/bet``: a slot spin settles atomically through the SAME
+    shared bet loop (single debit → engine outcome → single credit), so this adds NO
+    per-game logic — it just exposes the spec's named slots endpoint. The response is
+    the §2.2 bet object whose ``outcome`` carries the grid + line/feature wins."""
+    return await post_bet(game_id, body, request, current)
+
+
 class ActionRequest(BaseModel):
     """The /action intent for a stateful round (Mines reveal/cashout, HiLo guess/cashout).
     Identity comes from the token, NEVER the body; the server decides the outcome from its
