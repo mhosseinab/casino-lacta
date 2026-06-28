@@ -16,6 +16,7 @@ import json
 from contextlib import suppress
 
 from app.ws.crash import (
+    DEFAULT_CRASH_EDGE,
     CrashActor,
     InMemoryPubSub,
     RoundTimings,
@@ -23,6 +24,8 @@ from app.ws.crash import (
     cosmetic_multiplier,
 )
 from engine.fairness import commit
+from engine.games._curve import crash_point
+from verifier import reproduce_round
 
 # A fixed seed whose round-1 crash point is 2.49× — enough cosmetic ticks to climb,
 # not an instant bust (which would legitimately emit zero ticks).
@@ -82,6 +85,22 @@ async def test_crash_event_reveals_seed_that_hashes_to_the_commitment() -> None:
     revealed = bytes.fromhex(crash_event["serverSeed"])
     assert revealed == _FIXTURE_SEED
     assert hashlib.sha256(revealed).hexdigest() == round_event["serverSeedHash"]
+
+
+async def test_revealed_seed_reproduces_crashpoint_via_verifier() -> None:
+    """The S7 verifier `round` mode reproduces the emitted round end-to-end: a
+    client takes the crash event's revealed serverSeed and recomputes the exact
+    crashPoint — the public proof that the round was fixed at the committed seed."""
+    broker = InMemoryPubSub()
+    await _build_actor(broker).run_round(1)
+    crash_event = json.loads(broker.log[-1][1])
+
+    f = reproduce_round(
+        server_seed=bytes.fromhex(crash_event["serverSeed"]),
+        round_id=crash_event["roundId"],
+        round_number=crash_event["roundNumber"],
+    )
+    assert crash_point(f, DEFAULT_CRASH_EDGE) == crash_event["crashPoint"]
 
 
 async def test_cosmetic_ticks_never_reach_or_feed_C() -> None:
