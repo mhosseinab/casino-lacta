@@ -56,6 +56,16 @@ SETUP (once, before S1):
    stale `.git/**/*.lock` by renaming them aside before each git op, and prefer per-step worktrees so
    indexes never collide.)
 
+WORKTREE DISCIPLINE (applies to EVERY step — non-negotiable):
+- Create a FRESH worktree per step off casino-client/main:
+  `git worktree add -b casino-client/S<N> .worktrees/cc-S<N> casino-client/main`
+  (or sibling `../.casino-wt/cc-S<N>`). The worker does ALL reads/edits/tests/commits inside it.
+- Merge to casino-client/main FROM the cc-main worktree, then tear the step worktree down:
+  `git worktree remove .worktrees/cc-S<N>` and `git branch -d casino-client/S<N>`.
+- The shared top-level checkout is OFF-LIMITS for client work (it carries casino-games/* WIP — editing
+  there can capture that WIP into a client commit). If a crashed step leaves a stale entry, run
+  `git worktree prune`.
+
 THE LOOP — drive the steps as a DAG, not a flat list. A step is ELIGIBLE when all its prerequisites
 are "passed". Dispatch INDEPENDENT eligible steps (disjoint files, no edge) CONCURRENTLY; SERIALIZE
 steps joined by an edge or that edit the same files. Known parallel sets: {S2,S3,S6} after S1;
@@ -68,7 +78,9 @@ For each step in flight:
 
 1) DISPATCH WORKER (a FRESH subagent every time — the main context-hygiene mechanism):
    - From casino-client/main, create branch casino-client/S<N> AND a DEDICATED worktree for it
-     (MANDATORY: `.worktrees/cc-S<N>`, or sibling `../.casino-wt/cc-S<N>` — never the shared tree).
+     (MANDATORY — never the shared tree):
+     `git worktree add -b casino-client/S<N> .worktrees/cc-S<N> casino-client/main`
+     (or sibling `../.casino-wt/cc-S<N>`). Pass the worktree PATH to the worker.
    - Spawn a worker subagent whose prompt is:
        "You are working in a DEDICATED git worktree on branch casino-client/S<N> (path given) —
         all reads/edits/commits happen there, NEVER in the shared top-level working tree.
@@ -84,8 +96,8 @@ For each step in flight:
         step touches the contract, run `task contracts` and commit the generated file too.
         Then RUN this step's Verify block yourself and paste the ACTUAL command output:
         <paste the step's Verify block>.
-        Commit on casino-client/S<N>: stage files BY NAME (not add-all), Conventional Commits, don't
-        bypass hooks, never force-push. Keep context lean.
+        Commit IN THIS WORKTREE on casino-client/S<N>: stage files BY NAME (not add-all), Conventional
+        Commits, don't bypass hooks, never force-push. Keep context lean.
         Report: files changed, a concise diff summary, the Verify output (pass/fail), and anything you
         could not satisfy."
    - The worker MUST actually run the verification and paste output. If Verify fails, it fixes until
@@ -103,8 +115,10 @@ For each step in flight:
      Do NOT fix anything.
 
 3) FEEDBACK LOOP:
-   - PASS and Verify green → merge casino-client/S<N> onto casino-client/main (rebase first if it
-     touches registry.tsx), record SHA + "passed" in the progress file, go to (4).
+   - PASS and Verify green → from the cc-main worktree, merge casino-client/S<N> onto
+     casino-client/main (rebase first if it touches registry.tsx); then TEAR DOWN the step worktree
+     (`git worktree remove .worktrees/cc-S<N>` + `git branch -d casino-client/S<N>`); record SHA +
+     "passed" in the progress file, go to (4).
    - CHANGES_REQUESTED → dispatch a FRESH fix worker (given the branch diff + the numbered issues):
      "Address these review issues, re-run the Verify block, paste output." Then back to (2). Cap at 3
      review cycles per step.
@@ -115,6 +129,8 @@ For each step in flight:
 4) CONTEXT HYGIENE + ADVANCE:
    - Update the progress file (status, SHA, one-line note, append to the Log). Carry forward any
      constraint a later step must honor (e.g. a contract field a view depends on).
+   - Confirm the step's worktree is gone (`git worktree list` shows no `cc-S<N>`; `git worktree prune`
+     if a crash left it stale) so worktrees don't accumulate.
    - Compact your own context (durable state is the progress file, not the transcript).
    - Move to the next eligible step(s).
 
