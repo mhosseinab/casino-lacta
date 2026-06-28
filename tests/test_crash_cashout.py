@@ -33,9 +33,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db.models import Bet, LedgerEntry, User, Wallet
 from app.games.bet_loop import _idempotency_key
 from app.wallet import Ledger
-from app.ws.crash import CrashActor
+from app.ws.crash import CrashActor, CrashBettingClosed, CrashNotRunning
 from app.ws.crash_bets import (
     CRASH_GAME_ID,
+    _settle_bet,
     manual_cashout,
     open_crash_round,
     place_crash_bet,
@@ -402,3 +403,135 @@ class _DummyPublisher:
 
 def test_crash_game_id_is_originals_crash() -> None:
     assert CRASH_GAME_ID == "originals.crash"
+
+
+# --------------------------------------------------------------------------- #
+# Server-authoritative TIMING gates — the controls that stop latency/information
+# arbitrage (betting AFTER watching the multiplier climb; cashing out outside the
+# run window). Each test below FAILS if its specific guard in
+# CrashActor.place_bet / cash_out is removed (non-vacuity confirmed).
+# --------------------------------------------------------------------------- #
+def _make_actor(
+    session_factory: async_sessionmaker[AsyncSession], ledger: Ledger
+) -> CrashActor:
+    return CrashActor(_DummyPublisher(), session_factory=session_factory, ledger=ledger)
+
+
+def _waiting_round() -> CrashRound:
+    return CrashRound.open(
+        round_server_seed=_SEED, round_id=f"round-{uuid4().hex}", round_number=1, edge=EDGE
+    )
+
+
+async def test_place_bet_rejected_during_running(
+    session_factory: async_sessionmaker[AsyncSession], ledger: Ledger
+) -> None:
+    """Betting is WAITING-only: a placement once the round is RUNNING (multiplier
+    visibly climbing) is rejected — no information-arbitrage entry."""
+    actor = _make_actor(session_factory, ledger)
+    actor._round = _waiting_round().lock().start()  # noqa: SLF001 - RUNNING
+    with pytest.raises(CrashBettingClosed):
+        await actor.place_bet(user_id="u", bet_id=f"bet-{uuid4().hex}", stake_minor=1000)
+
+
+async def test_place_bet_rejected_when_no_round(
+    session_factory: async_sessionmaker[AsyncSession], ledger: Ledger
+) -> None:
+    """No round in progress → no placement (the round-is-None arm of the guard)."""
+    actor = _make_actor(session_factory, ledger)
+    assert actor._round is None  # noqa: SLF001
+    with pytest.raises(CrashBettingClosed):
+        await actor.place_bet(user_id="u", bet_id=f"bet-{uuid4().hex}", stake_minor=1000)
+
+
+async def test_cash_out_rejected_during_waiting(
+    session_factory: async_sessionmaker[AsyncSession], ledger: Ledger
+) -> None:
+    """Cash-out is RUNNING-only: a cash-out during the WAITING betting window is
+    rejected (you cannot exit a run that has not started)."""
+    actor = _make_actor(session_factory, ledger)
+    actor._round = _waiting_round()  # noqa: SLF001 - WAITING
+    with pytest.raises(CrashNotRunning):
+        await actor.cash_out(bet_id=f"bet-{uuid4().hex}")
+
+
+async def test_cash_out_rejected_after_crashed(
+    session_factory: async_sessionmaker[AsyncSession], ledger: Ledger
+) -> None:
+    """A cash-out after the round CRASHED is rejected by the timing gate (the late
+    request is a loss handled by the sweep, never a post-crash exit)."""
+    actor = _make_actor(session_factory, ledger)
+    actor._round = _waiting_round().lock().start().crash()  # noqa: SLF001 - CRASHED
+    with pytest.raises(CrashNotRunning):
+        await actor.cash_out(bet_id=f"bet-{uuid4().hex}")
+
+
+async def test_cash_out_rejected_when_no_round(
+    session_factory: async_sessionmaker[AsyncSession], ledger: Ledger
+) -> None:
+    """No round in progress → no cash-out (the round-is-None arm of the guard)."""
+    actor = _make_actor(session_factory, ledger)
+    assert actor._round is None  # noqa: SLF001
+    with pytest.raises(CrashNotRunning):
+        await actor.cash_out(bet_id=f"bet-{uuid4().hex}")
+
+
+# --------------------------------------------------------------------------- #
+# Single-terminal-transition guard, bound DIRECTLY on _settle_bet. Unlike the
+# sweep test (whose ACTIVE-filtered SELECT means _settle_bet is never called on a
+# terminal bet), these invoke _settle_bet on an ALREADY-terminal bet with a
+# CONFLICTING decision — so they bind the `status != "ACTIVE"` guard itself.
+# Neuter that guard to `if False:` and both FAIL (status flips / a row is added).
+# --------------------------------------------------------------------------- #
+async def test_settle_bet_guard_keeps_won_bet_won(
+    session_factory: async_sessionmaker[AsyncSession],
+    ledger: Ledger,
+    funded_user: tuple[str, str],
+) -> None:
+    user_id, _wallet_id = funded_user
+    rnd = await _open_round(session_factory)
+    stake = 1000
+    bet_id = f"bet-{uuid4().hex}"
+    await place_crash_bet(
+        session_factory, ledger, round_id=rnd.round_id, user_id=user_id,
+        bet_id=bet_id, stake_minor=stake, auto_cashout=None,
+    )
+
+    # First: settle it WON. Then a CONFLICTING second settle (win=False) must be a
+    # no-op — the guard refuses to re-decide a terminal bet.
+    won = await _settle_bet(session_factory, ledger, bet_id=bet_id, win=True, multiplier=2.0)
+    conflicting = await _settle_bet(
+        session_factory, ledger, bet_id=bet_id, win=False, multiplier=0.0
+    )
+
+    assert won.status == "WON"
+    assert conflicting.status == "WON"  # NOT flipped to LOST
+    assert await _bet_status(session_factory, bet_id) == "WON"
+    assert await _ledger_count(session_factory, _idempotency_key(bet_id, "WIN")) == 1
+
+
+async def test_settle_bet_guard_keeps_lost_bet_lost(
+    session_factory: async_sessionmaker[AsyncSession],
+    ledger: Ledger,
+    funded_user: tuple[str, str],
+) -> None:
+    user_id, _wallet_id = funded_user
+    rnd = await _open_round(session_factory)
+    stake = 1000
+    bet_id = f"bet-{uuid4().hex}"
+    await place_crash_bet(
+        session_factory, ledger, round_id=rnd.round_id, user_id=user_id,
+        bet_id=bet_id, stake_minor=stake, auto_cashout=None,
+    )
+
+    # First: settle it LOST. Then a CONFLICTING second settle (win=True) must be a
+    # no-op — the guard refuses to pay out an already-lost bet.
+    lost = await _settle_bet(session_factory, ledger, bet_id=bet_id, win=False, multiplier=0.0)
+    conflicting = await _settle_bet(
+        session_factory, ledger, bet_id=bet_id, win=True, multiplier=2.0
+    )
+
+    assert lost.status == "LOST"
+    assert conflicting.status == "LOST"  # NOT flipped to WON
+    assert await _bet_status(session_factory, bet_id) == "LOST"
+    assert await _ledger_count(session_factory, _idempotency_key(bet_id, "WIN")) == 0
