@@ -143,6 +143,28 @@ async def test_no_hole_card_leakage_across_full_hand() -> None:
     assert saw_reveal, "the showdown-reveal path was never exercised — test is vacuous"
 
 
+async def test_hand_commits_seed_hash_but_never_reveals_the_raw_seed() -> None:
+    """Provable-fairness commitment: every published view carries the deck commitment
+    (SHA-256 of the deal seed), so a client can verify the deck was fixed before play.
+    The raw seed is NEVER published — and is NOT revealed at hand end (revealing a poker
+    deal seed would reconstruct folded players' mucked holes — the redaction would break;
+    poker fairness needs per-card commitments, a deferred seam)."""
+    from engine.fairness import commit
+
+    broker = InMemoryPubSub()
+    actor = _new_actor(broker, InMemoryStateStore())
+    await actor.start_hand(_STACKS, button=0)
+    await _drive_to_showdown(actor, fold_seat=0)
+
+    expected_hash = commit(_fixed_seed())
+    raw_seed_hex = _fixed_seed().hex()
+    state_msgs = [m for _c, m in broker.log if json.loads(m).get("type") == "state"]
+    assert state_msgs
+    for message in state_msgs:
+        assert json.loads(message)["serverSeedHash"] == expected_hash  # commitment present
+        assert raw_seed_hex not in message  # the raw seed is NEVER on the wire, ever
+
+
 async def test_naive_full_broadcast_leaks_holes_the_RED() -> None:
     """The RED: an actor wired with a NAIVE 'broadcast the whole table' projection (every
     hole + the undealt board to every channel) is caught by the SAME detector — proving

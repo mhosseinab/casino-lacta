@@ -56,6 +56,7 @@ from app.ws.crash import (
     SupportsPublish,
     _pump,
 )
+from engine.fairness import commit
 from engine.poker.table import (
     Action,
     ActionKind,
@@ -381,17 +382,32 @@ class PokerActor:
     async def _checkpoint(self) -> None:
         await self._store.save(self._table_id, self._checkpoint_payload())
 
+    @property
+    def server_seed_hash(self) -> str:
+        """The deck COMMITMENT for the current hand: SHA-256 of the deal seed. Published
+        with every view so a client can later verify the deck was fixed before play. The
+        raw seed is NEVER published — and (unlike Crash) is NOT revealed at hand end,
+        because the deal is a pure function of the seed: revealing it would reconstruct
+        every FOLDED player's mucked hole cards, breaking the redaction invariant. Poker
+        fairness needs per-card commitments / show-only-revealed-cards (a documented seam,
+        deferred)."""
+        assert self._seed is not None
+        return commit(self._seed)
+
     async def _broadcast(self) -> None:
         """Publish a SEPARATELY-redacted view to each seat's own channel + a spectator
         channel. Each payload is built by the engine whitelist for that exact viewer, so
-        no seat's hole cards ever appear on another seat's channel."""
+        no seat's hole cards ever appear on another seat's channel. The deck commitment
+        (seed hash) rides along; the raw seed never does."""
         state = self.state
+        seed_hash = self.server_seed_hash
         for seat in state.seats:
             view = self._project(state, seat.seat_id)
+            view["serverSeedHash"] = seed_hash
             await self._publish(seat_channel(self._table_id, seat.seat_id), "state", view)
-        await self._publish(
-            public_channel(self._table_id), "state", self._project(state, None)
-        )
+        public = self._project(state, None)
+        public["serverSeedHash"] = seed_hash
+        await self._publish(public_channel(self._table_id), "state", public)
 
     async def _send_error(self, seat: int, message: str) -> None:
         """An error visible ONLY to the offending seat (its own channel)."""
