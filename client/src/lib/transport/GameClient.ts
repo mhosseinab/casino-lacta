@@ -22,6 +22,22 @@ export const CRASH_WS_PATH = '/games/originals.crash';
 export type GameStateProjection = { [key: string]: unknown };
 export type ActionResult = { [key: string]: unknown };
 
+// A bet the SERVER refused (min/max-bet, RG/limit, disabled game, insufficient funds):
+// the app returns a non-2xx HTTPException envelope `{detail}` rather than a BetObject.
+// The transport raises this typed error so a view can surface `reason` to the player
+// instead of mis-rendering the rejection as a settled bet (the res.ok gate). It carries
+// no outcome — the server decided NOT to place the bet.
+export class BetRejectedError extends Error {
+  readonly status: number;
+  readonly reason: string;
+  constructor(status: number, reason: string) {
+    super(reason);
+    this.name = 'BetRejectedError';
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
 // fairness() is a union, not a throw: the real adapter returns the server's disclosure;
 // the demo adapter CANNOT produce a real provably-fair proof, so it reports unavailable
 // instead of fabricating one (iron rule: the server decides — and proves — outcomes).

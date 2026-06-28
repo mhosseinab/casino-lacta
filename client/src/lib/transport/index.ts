@@ -21,7 +21,7 @@ export type {
   GameClient,
   GameStateProjection,
 } from './GameClient';
-export { CRASH_WS_PATH } from './GameClient';
+export { BetRejectedError, CRASH_WS_PATH } from './GameClient';
 export { HttpGameClient } from './HttpGameClient';
 export { MockGameClient } from './mock/MockGameClient';
 

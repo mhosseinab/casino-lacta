@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BetObject, GuestSessionResponse } from '../../contracts';
+import { BetRejectedError } from './GameClient';
 import { HttpGameClient } from './HttpGameClient';
 
 const BASE = 'https://api.example.test';
@@ -122,6 +123,39 @@ describe('HttpGameClient — it only transports', () => {
     const retried = betAttempts[1];
     const headers = retried[1]?.headers as Record<string, string>;
     expect(headers.Authorization).toBe('Bearer tok-new');
+  });
+
+  it('surfaces a non-ok /bet envelope as a typed BetRejectedError (the res.ok gate)', async () => {
+    // The server rejects the bet (RG limit / min-max) with an HTTPException
+    // envelope `{detail}` and a non-2xx status. Without a res.ok check the
+    // transport casts that body straight to a "successful" BetObject, hiding the
+    // rejection from the view. The transport must reject with a typed error so the
+    // view can surface the reason.
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (url.endsWith('/auth/guest'))
+          return Promise.resolve(mockResponse(200, guest));
+        return Promise.resolve(
+          mockResponse(403, {
+            detail: 'bet blocked: daily loss limit reached',
+          }),
+        );
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new HttpGameClient(BASE);
+    await client.startGuestSession();
+
+    await expect(client.bet('originals.dice', betReq)).rejects.toMatchObject({
+      name: 'BetRejectedError',
+      status: 403,
+      reason: 'bet blocked: daily loss limit reached',
+    });
+    await expect(client.bet('originals.dice', betReq)).rejects.toBeInstanceOf(
+      BetRejectedError,
+    );
   });
 
   it('is not a demo transport', () => {

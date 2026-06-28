@@ -37,7 +37,7 @@ export function gameView(
  * >>> APPEND NEW GAME VIEWS BELOW THIS LINE (one per step) <<<
  */
 export const gameViews: Record<string, GameView> = {
-  // (no games registered yet)
+  'originals.dice': gameView(() => import('./dice/DiceView')),
 };
 
 /** True once a game step has registered a view for this id. */

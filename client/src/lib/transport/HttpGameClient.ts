@@ -9,6 +9,7 @@ import type {
 } from '../../contracts';
 import {
   type ActionResult,
+  BetRejectedError,
   CRASH_WS_PATH,
   type CrashEvent,
   type CrashSocketHandlers,
@@ -51,7 +52,7 @@ export class HttpGameClient implements GameClient {
       `/games/${gameId}/bet`,
       this.jsonInit('POST', input),
     );
-    return (await res.json()) as BetObject;
+    return this.asBet(res);
   }
 
   async spin(gameId: string, input: BetRequest): Promise<BetObject> {
@@ -59,7 +60,7 @@ export class HttpGameClient implements GameClient {
       `/games/${gameId}/spin`,
       this.jsonInit('POST', input),
     );
-    return (await res.json()) as BetObject;
+    return this.asBet(res);
   }
 
   async action(
@@ -102,6 +103,27 @@ export class HttpGameClient implements GameClient {
   }
 
   // --- internals: token + request plumbing (no game logic) --------------------- //
+
+  // Settle a /bet or /spin response: a 2xx body is the server's BetObject (returned
+  // UNCHANGED); a non-2xx is a refusal envelope `{detail}` we raise as a typed
+  // BetRejectedError so the view can show the reason. The detail is a string for the
+  // app's HTTPExceptions; pydantic body-validation sends an array, so we fall back to
+  // the status text rather than rendering `[object Object]`.
+  private async asBet(res: Response): Promise<BetObject> {
+    if (res.ok) {
+      return (await res.json()) as BetObject;
+    }
+    let reason = res.statusText || `Bet rejected (HTTP ${res.status})`;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      if (typeof body.detail === 'string' && body.detail.length > 0) {
+        reason = body.detail;
+      }
+    } catch {
+      // Non-JSON error body — keep the status-text reason.
+    }
+    throw new BetRejectedError(res.status, reason);
+  }
 
   private jsonInit(method: string, body: unknown): RequestInit {
     return {
