@@ -65,7 +65,7 @@ from engine.registry import (  # noqa: F401  (default_config re-exported for cal
 )
 from engine.rng import create_rng
 from engine.types import GameConfig as EngineConfig
-from engine.types import InstantGame
+from engine.types import InstantGame, StatefulGame
 
 # ----------------------------------------------------------------------------- errors
 
@@ -88,6 +88,15 @@ class RgDenied(BetRejected):
 
 class ActiveRoundExists(BetRejected):
     """A stateful round is already open for this ``(user, game)`` (one-active-round guard)."""
+
+
+class RoundNotFound(Exception):
+    """No round for the given ``(round_id, game_id)`` owned by the caller (or it's
+    another user's round — same error, so existence is not disclosed)."""
+
+
+class RoundTerminal(Exception):
+    """An action was attempted on a terminal round (LOST / CASHED_OUT / SETTLED)."""
 
 
 # ----------------------------------------------------------------------------- view model
@@ -309,14 +318,17 @@ async def place_bet(
     mode: str = "PLAY",
     input: dict[str, Any] | None = None,
 ) -> BetObject:
-    """Place + settle one instant bet, server-authoritative and idempotent on ``bet_id``."""
+    """Place a bet, server-authoritative and idempotent on ``bet_id``.
+
+    Instant games settle atomically (debit → outcome → credit). Stateful games
+    (Mines S12, …) OPEN a round here — single debit + committed layout, status
+    ACTIVE — and resolve later via :func:`step_action`; the credit happens at cashout.
+    """
     bet_input: dict[str, Any] = dict(input or {})
     if stake_minor <= 0:
         raise StakeOutOfRange(f"stake {stake_minor} must be positive")
 
     game = load_game(game_id)  # raises engine.registry.UnknownGame for an unknown id
-    if not _is_instant(game):  # stateful path lands in S12 (this loop owns the guard)
-        raise NotImplementedError(f"stateful game {game_id} not wired until S12")
 
     # 1. Validate against the AUTHORITATIVE DB config + limits (no money moves yet).
     async with session_factory() as session:
@@ -346,14 +358,18 @@ async def place_bet(
         existing = await session.get(Bet, bet_id)
 
     # 1b. Per-game input fence — pure, at the boundary BEFORE any nonce reservation,
-    # debit, or play(). An out-of-range/malformed input raises InvalidBetInput and
-    # moves ZERO credits (the debit below is never reached). Same engine seam the
-    # verifier sees; the router maps the raised error to a 4xx.
-    cast(InstantGame, game).validate_input(bet_input, engine_cfg)
+    # debit, or init/play(). An out-of-range/malformed input raises InvalidBetInput
+    # and moves ZERO credits. Both InstantGame and StatefulGame conform; same engine
+    # seam the verifier sees; the router maps the raised error to a 4xx.
+    instant = _is_instant(game)
+    game.validate_input(bet_input, engine_cfg)
 
-    # 2. Idempotent replay: a known bet returns the original (heals an un-credited win).
+    # 2. Idempotent replay: a known bet returns the original (instant heals an
+    # un-credited win; stateful returns the round's current safe projection).
     if existing is not None:
-        return await _finalize_existing(session_factory, ledger, bet_id)
+        if instant:
+            return await _finalize_existing(session_factory, ledger, bet_id)
+        return await _stateful_replay(session_factory, bet_id, game_id)
 
     # 3. RG gate BEFORE the debit — a deny moves no credits.
     decision = can_bet(
@@ -361,6 +377,30 @@ async def place_bet(
     )
     if not decision.allowed:
         raise RgDenied(decision.reason or "blocked by responsible-gaming policy")
+
+    # 3b. Stateful: open a server-held round (single debit, committed layout, ACTIVE).
+    # The shared one-active-(user,game)-round guard runs BEFORE any money moves. It is
+    # best-effort (advisory, like the S6 guard): it runs in its own session with no
+    # lock, so two simultaneous distinct-betId opens could both pass before either
+    # round is ACTIVE. S12 only requires blocking a SECOND (sequential) round; a hard
+    # concurrency constraint is out of scope here.
+    if not instant:
+        await assert_no_active_round(session_factory, user_id, game_id)
+        return await _open_stateful_round(
+            session_factory,
+            ledger,
+            game=cast("StatefulGame", game),
+            user_id=user_id,
+            game_id=game_id,
+            bet_id=bet_id,
+            stake_minor=stake_minor,
+            currency=currency,
+            mode=mode,
+            wallet_id=wallet_id,
+            config_version=config_version,
+            engine_cfg=engine_cfg,
+            bet_input=bet_input,
+        )
 
     key_debit = _idempotency_key(bet_id, "WAGER")
     key_credit = _idempotency_key(bet_id, "WIN")
@@ -480,3 +520,260 @@ async def place_bet(
         settled_at=now,
         idempotency_keys={"debit": key_debit, "credit": key_credit},
     )
+
+
+# --------------------------------------------------------------------- stateful saga
+
+
+async def _open_stateful_round(
+    session_factory: async_sessionmaker[AsyncSession],
+    ledger: Ledger,
+    *,
+    game: StatefulGame,
+    user_id: str,
+    game_id: str,
+    bet_id: str,
+    stake_minor: int,
+    currency: str,
+    mode: str,
+    wallet_id: str,
+    config_version: int,
+    engine_cfg: EngineConfig,
+    bet_input: dict[str, Any],
+) -> BetObject:
+    """Open a server-held round: single debit at start, commit the hidden layout from
+    the seeded stream, persist ``status=ACTIVE``. NO credit here — settlement is
+    ``step_action`` (cashout). The full opaque state goes to the server-only
+    ``server_state`` column; the client-facing ``outcome`` carries only a generic
+    ``{status, k}`` projection (no layout)."""
+    key_debit = _idempotency_key(bet_id, "WAGER")
+    key_credit = _idempotency_key(bet_id, "WIN")
+
+    # Single debit at open (InsufficientFunds aborts here — nothing persisted).
+    await ledger.debit(
+        wallet_id=wallet_id, amount_minor=stake_minor, idempotency_key=key_debit, ref=bet_id
+    )
+
+    now = datetime.now(UTC)
+    open_projection: dict[str, Any] = {"status": "ACTIVE", "k": 0}
+    try:
+        async with session_factory() as session, session.begin():
+            fair = await _reserve_fairness(session, user_id)
+            rng = create_rng(fair.server_seed, fair.client_seed, fair.nonce)
+            state = game.init(bet_input, rng, engine_cfg)  # opaque; not inspected here
+            session.add(
+                GameRound(
+                    id=bet_id,
+                    game_id=game_id,
+                    type="SINGLE",
+                    server_seed_id=fair.server_seed_id,
+                    nonce=fair.nonce,
+                    status="ACTIVE",
+                    input=bet_input,
+                    outcome=open_projection,
+                    server_state=state,  # SERVER-ONLY (redaction)
+                    config_version=config_version,
+                    created_at=now,
+                )
+            )
+            await session.flush()
+            session.add(
+                Bet(
+                    id=bet_id,
+                    round_id=bet_id,
+                    user_id=user_id,
+                    wallet_id=wallet_id,
+                    currency=currency,
+                    mode=mode,
+                    stake_minor=stake_minor,
+                    status="ACTIVE",
+                    idempotency_key_debit=key_debit,
+                    idempotency_key_credit=key_credit,
+                    created_at=now,
+                )
+            )
+            await session.flush()
+            session.add(
+                AuditEvent(
+                    id=uuid4().hex,
+                    bet_id=bet_id,
+                    round_id=bet_id,
+                    type="ROUND_OPENED",
+                    payload={
+                        "gameId": game_id,
+                        "serverSeedId": fair.server_seed_id,
+                        "serverSeedHash": fair.server_seed_hash,
+                        "clientSeed": fair.client_seed,
+                        "nonce": fair.nonce,
+                        "input": bet_input,
+                        "configVersion": config_version,
+                    },
+                )
+            )
+    except IntegrityError:
+        # A concurrent open won the betId PK race (its nonce bump rolled back with
+        # this failed insert). Return its current round; a non-duplicate error surfaces.
+        async with session_factory() as session:
+            winner = await session.get(Bet, bet_id)
+        if winner is None:
+            raise
+        return await _stateful_replay(session_factory, bet_id, game_id)
+
+    return BetObject(
+        bet_id=bet_id,
+        game_id=game_id,
+        user_id=user_id,
+        wallet_id=wallet_id,
+        currency=currency,
+        mode=mode,
+        stake_minor=stake_minor,
+        status="ACTIVE",
+        fairness=Fairness(
+            server_seed_hash=fair.server_seed_hash,
+            client_seed=fair.client_seed,
+            nonce=fair.nonce,
+        ),
+        input=bet_input,
+        outcome=open_projection,
+        created_at=now,
+        settled_at=None,
+        idempotency_keys={"debit": key_debit, "credit": key_credit},
+    )
+
+
+async def _stateful_replay(
+    session_factory: async_sessionmaker[AsyncSession], bet_id: str, game_id: str
+) -> BetObject:
+    """An idempotent /bet resend returns the round's CURRENT safe projection (status +
+    layout-free outcome), moving no money. Fairness fields come from the immutable
+    ROUND_OPENED audit record."""
+    async with session_factory() as session:
+        bet = await session.get(Bet, bet_id)
+        round_row = await session.get(GameRound, bet_id)
+        audit = await session.scalar(
+            select(AuditEvent)
+            .where(AuditEvent.bet_id == bet_id, AuditEvent.type == "ROUND_OPENED")
+            .limit(1)
+        )
+    if bet is None or round_row is None:
+        raise RoundNotFound(f"no round for bet {bet_id}")
+    payload = dict(audit.payload or {}) if audit is not None else {}
+    return BetObject(
+        bet_id=bet.id,
+        game_id=game_id,
+        user_id=bet.user_id,
+        wallet_id=bet.wallet_id,
+        currency=bet.currency,
+        mode=bet.mode,
+        stake_minor=bet.stake_minor,
+        status=bet.status,
+        fairness=Fairness(
+            server_seed_hash=str(payload.get("serverSeedHash", "")),
+            client_seed=str(payload.get("clientSeed", "")),
+            nonce=int(payload.get("nonce", round_row.nonce or 0)),
+        ),
+        input=dict(round_row.input or {}),
+        outcome=dict(round_row.outcome or {}),
+        created_at=bet.created_at,
+        settled_at=bet.settled_at,
+        idempotency_keys={
+            "debit": bet.idempotency_key_debit or "",
+            "credit": bet.idempotency_key_credit or "",
+        },
+    )
+
+
+async def step_action(
+    session_factory: async_sessionmaker[AsyncSession],
+    ledger: Ledger,
+    *,
+    user_id: str,
+    game_id: str,
+    round_id: str,
+    action: dict[str, Any],
+) -> dict[str, Any]:
+    """Advance a stateful round by one action (reveal / cashout), server-authoritative.
+
+    Action serialization: the ``GameRound`` row is locked ``FOR UPDATE`` for the whole
+    transition, so concurrent reveals serialize and cannot double-advance ``k``. The
+    app never inspects the opaque ``server_state`` — it feeds it to ``GAME.step`` and
+    drives credit/round-status from the generic ``Outcome.detail["status"]`` and
+    ``Outcome.multiplier``. The credit (cashout only) is single + idempotent and runs
+    AFTER the locked commit, self-healing a crash between the committed state and it."""
+    game = load_game(game_id)
+    if _is_instant(game):
+        raise RoundTerminal(f"{game_id} has no stateful actions")
+    stateful = cast("StatefulGame", game)
+
+    now = datetime.now(UTC)
+    credit_req: tuple[str, int, str] | None = None  # (wallet_id, amount, key_credit)
+    response: dict[str, Any]
+
+    async with session_factory() as session, session.begin():
+        # Row lock for the whole transition — serializes concurrent actions.
+        round_row = await session.get(GameRound, round_id, with_for_update=True)
+        if round_row is None or round_row.game_id != game_id:
+            raise RoundNotFound(f"no {game_id} round {round_id}")
+        bet = await session.scalar(select(Bet).where(Bet.round_id == round_id))
+        if bet is None or bet.user_id != user_id:
+            # Identity fence: never disclose or act on another user's round.
+            raise RoundNotFound(f"no {game_id} round {round_id}")
+
+        op = action.get("op")
+        status = round_row.status
+
+        if status != "ACTIVE":
+            # Terminal: honour ONLY an idempotent cashout replay (heal an un-landed
+            # credit); reject every other action on a finished round.
+            if op == "cashout" and status == "CASHED_OUT":
+                response = dict(round_row.outcome or {})
+                response["roundId"] = round_id
+                response["payoutMinor"] = bet.payout_minor or 0
+                if bet.payout_minor and bet.idempotency_key_credit:
+                    credit_req = (bet.wallet_id, bet.payout_minor, bet.idempotency_key_credit)
+            else:
+                raise RoundTerminal(f"round {round_id} is {status}; no further actions")
+        else:
+            state = dict(round_row.server_state or {})
+            next_state, outcome = stateful.step(state, action)  # may raise InvalidBetInput
+            if outcome is None:  # pragma: no cover - Mines yields a projection per action
+                raise RoundTerminal(f"round {round_id} produced no outcome")
+            detail = dict(outcome.detail)
+            new_status = str(detail["status"])
+
+            round_row.server_state = next_state  # opaque, server-only
+            round_row.outcome = detail  # client-facing projection (no leak when ACTIVE)
+            response = dict(detail)
+            response["roundId"] = round_id
+
+            if new_status == "CASHED_OUT":
+                limit = await session.get(GameLimit, (game_id, bet.currency))
+                max_win = limit.max_win if limit is not None else 0
+                payout = cap(apply_multiplier(bet.stake_minor, outcome.multiplier), max_win)
+                round_row.status = "CASHED_OUT"
+                round_row.settled_at = now
+                bet.status = "WON"
+                bet.payout_minor = payout
+                bet.multiplier = Decimal(str(outcome.multiplier))
+                bet.settled_at = now
+                response["payoutMinor"] = payout
+                key_credit = bet.idempotency_key_credit or _idempotency_key(round_id, "WIN")
+                credit_req = (bet.wallet_id, payout, key_credit)
+            elif new_status == "LOST":
+                round_row.status = "LOST"
+                round_row.settled_at = now
+                bet.status = "LOST"
+                bet.payout_minor = 0
+                bet.multiplier = Decimal("0")
+                bet.settled_at = now
+            # ACTIVE: a safe reveal — round continues, nothing settled.
+
+    # Single credit on cashout (idempotent; outside the round lock).
+    if credit_req is not None:
+        wallet_id, amount, key_credit = credit_req
+        if amount > 0:
+            await ledger.credit(
+                wallet_id=wallet_id, amount_minor=amount, idempotency_key=key_credit, ref=round_id
+            )
+
+    return response

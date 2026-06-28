@@ -32,8 +32,11 @@ from app.games import (
     BetObject,
     GameDisabled,
     RgDenied,
+    RoundNotFound,
+    RoundTerminal,
     StakeOutOfRange,
     place_bet,
+    step_action,
 )
 from app.wallet import InsufficientFunds, Ledger, WalletNotFound
 from engine.registry import UnknownGame
@@ -112,15 +115,49 @@ async def post_bet(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class ActionRequest(BaseModel):
+    """The /action intent for a stateful round (reveal / cashout). Identity comes from
+    the token, NEVER the body; the server decides the outcome from its held state."""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
+    round_id: str
+    op: str
+    cell: int | None = None
+
+
 @router.post("/{game_id}/action")
 async def post_action(
     game_id: str,
+    body: ActionRequest,
     request: Request,
     current: CurrentUser = Depends(get_current_user),
-) -> dict[str, str]:
-    # Stateful step/reveal/cashout — wired by the stateful path in S12+. Auth is
-    # enforced now so the seam is identity-safe the moment it is implemented.
-    raise HTTPException(status_code=501, detail=f"no stateful actions for {game_id} yet")
+) -> dict[str, Any]:
+    """Advance a stateful round (Mines reveal/cashout). Returns the safe client-facing
+    projection only — never the hidden layout. Identity is server-authoritative."""
+    rt = _runtime(request)
+    action: dict[str, Any] = {"op": body.op}
+    if body.cell is not None:
+        action["cell"] = body.cell
+    try:
+        return await step_action(
+            rt.session_factory,
+            rt.ledger,
+            user_id=current.user_id,  # server-authoritative identity (from the token)
+            game_id=game_id,
+            round_id=body.round_id,
+            action=action,
+        )
+    except UnknownGame as exc:
+        raise HTTPException(status_code=404, detail=f"unknown game {game_id}") from exc
+    except RoundNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RoundTerminal as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InvalidBetInput as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InsufficientFunds as exc:  # pragma: no cover - credit cannot underflow
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
 
 
 @router.get("/{game_id}/state")
@@ -143,6 +180,9 @@ async def get_state(
         )
     if round_row is None:
         raise HTTPException(status_code=404, detail="no round for this user/game")
+    # REDACTION: only the client-facing safe projection is serialized. The server-only
+    # `server_state` column (the Mines mine layout) is deliberately NEVER returned, so
+    # a mid-round caller cannot infer an unrevealed mine.
     return {
         "roundId": round_row.id,
         "gameId": round_row.game_id,

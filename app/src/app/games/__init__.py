@@ -12,9 +12,12 @@ from app.games.bet_loop import (
     BetRejected,
     GameDisabled,
     RgDenied,
+    RoundNotFound,
+    RoundTerminal,
     StakeOutOfRange,
     assert_no_active_round,
     place_bet,
+    step_action,
 )
 
 __all__ = [
@@ -23,7 +26,10 @@ __all__ = [
     "BetRejected",
     "GameDisabled",
     "RgDenied",
+    "RoundNotFound",
+    "RoundTerminal",
     "StakeOutOfRange",
     "assert_no_active_round",
     "place_bet",
+    "step_action",
 ]
