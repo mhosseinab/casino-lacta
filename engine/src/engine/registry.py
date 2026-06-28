@@ -15,6 +15,7 @@ import importlib
 from typing import cast
 
 from engine.games.keno import default_params as _keno_default_params
+from engine.table.video_poker import default_params as _video_poker_default_params
 from engine.types import GameConfig, InstantGame, StatefulGame
 
 # Plinko (spec §A.5) per-(rows, risk) multiplier tables — TUNED so the analytic
@@ -102,6 +103,16 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # params; default edge 0.01. The cumulative multiplier is unbounded in principle —
     # the real ceiling is the GOLD GameLimit max_win (enforced via engine.money.cap).
     "originals.hilo": ("engine.games.hilo", GameConfig(edge=0.01, params={})),
+    # Video Poker (spec §B.5): 5-card draw, 9/6 Jacks-or-Better. A StatefulGame — init
+    # commits 10 distinct cards (dealt 5 + 5 replacements) from one stream; the draw
+    # action's `holds` keep cards, discards are filled from the committed pool; the final
+    # hand is ranked by the shared cards.evaluator and mapped to the paytable. RTP emerges
+    # from the paytable (config, in params — not a clamp); ≈99.54% under optimal play, so
+    # edge≈0.0046 is informational (the engine reads the paytable, never `edge`).
+    "table.video_poker": (
+        "engine.table.video_poker",
+        GameConfig(edge=0.0046, params=_video_poker_default_params()),
+    ),
 }
 
 
