@@ -9,13 +9,41 @@ never scattered across callers.
 """
 
 from app.economy.faucets import (
+    DAILY_BASE_MINOR,
+    DAILY_STREAK_CAP,
+    DAILY_STREAK_STEP_MINOR,
+    HOURLY_GRANT_MINOR,
+    LEVEL_UP_BASE_MINOR,
     WELCOME_GRANT_MINOR,
+    FaucetResult,
+    FaucetStore,
+    RedisFaucetStore,
+    daily_streak_claim,
+    daily_streak_key,
+    hourly_claim,
+    hourly_key,
+    level_up_claim,
+    level_up_key,
     welcome_grant,
     welcome_grant_key,
 )
 
 __all__ = [
+    "DAILY_BASE_MINOR",
+    "DAILY_STREAK_CAP",
+    "DAILY_STREAK_STEP_MINOR",
+    "HOURLY_GRANT_MINOR",
+    "LEVEL_UP_BASE_MINOR",
     "WELCOME_GRANT_MINOR",
+    "FaucetResult",
+    "FaucetStore",
+    "RedisFaucetStore",
+    "daily_streak_claim",
+    "daily_streak_key",
+    "hourly_claim",
+    "hourly_key",
+    "level_up_claim",
+    "level_up_key",
     "welcome_grant",
     "welcome_grant_key",
 ]
