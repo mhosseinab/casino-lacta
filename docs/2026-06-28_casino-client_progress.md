@@ -45,8 +45,8 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S5  | App shell, lobby, auth/balance, badges | passed | 2 | merged → main | 7116dfd+fix 9b578cc (merge 948a63e) | 16-card lobby; server-only balance (SessionProvider); badges; GameRoute+test. CARRY-FWD: registry append contract is `'id': gameView(() => import('./dir/View')),` (one line) above the marker in client/src/games/registry.tsx |
 | S6  | PixiStage harness + reduced-motion | passed | 1 | merged → main | f525aa0 (merge 5e40812) | jsdom WebGL-probe seam; useReducedMotion. CARRY-FWD→S25: add vi.mock('pixi.js') lifecycle test (onReady/destroy-once/unmount-before-init race) — jsdom can't exercise teardown |
 | S7  | FairnessDrawer + verifier link | passed | 1 | cherry-picked → main | 1a14807 → cp 3732c25 | renders real disclosure; verifier URL is server-stamped (verifierUrl) rendered verbatim; demo/unavailable notice; 5 tests |
-| S8  | Shared BetControls + ResultPanel | pending | 0 | — | — | reused by all instant games |
-| S9  | Dice view (vertical slice) | pending | 0 | — | — | the reference pattern |
+| S8  | Shared BetControls + ResultPanel | passed | 1 | merged → main | 69f353c (merge 4b7f2ac) | BetControls(parseStakeToMinor, integer quick-stakes, rejectionReason prop) + ResultPanel(server-verbatim, FairnessDrawer wired); 10 tests. CARRY-FWD: ResultPanel assumes Dice-shaped outcome{multiplier,payoutMinor} — generalize for slots/table later |
+| S9  | Dice view (vertical slice) | pending | 0 | — | — | the reference pattern; ELIGIBLE (S6,S7,S8 ✓). MUST also fix S4 res.ok carry-fwd: HttpGameClient.bet should surface the server bet-error/RG envelope so BetControls.rejectionReason gets it |
 | S10 | REVIEW GATE (human go) | pending | 0 | — | — | STOP before S11+ |
 | S11 | Limbo view | pending | 0 | — | — | touches registry.tsx |
 | S12 | Pocket Dice view | pending | 0 | — | — | touches registry.tsx |
@@ -158,3 +158,8 @@ P7 Polish & ship
   Aggregate check @ 3732c25: pnpm install OK, tsc clean, vitest **47/47 (12 files)**, build OK,
   thin-renderer grep clean (only a doc comment in AppShell.test.tsx). Next eligible: **S8** (needs
   S5,S3 ✓) → S9 (needs S6,S7,S8) → **S10 HUMAN GATE**.
+- 2026-06-28: **REMOTE POLICY (user decision):** pull --rebase origin casino-client/main BEFORE each
+  step; do NOT push (user handles pushes). Observed: origin/casino-client/main advanced to bfc8995
+  (user pushed my S7+progress). Pull before S8 was a no-op (up to date).
+- 2026-06-28: **S8 PASSED** (reviewer PASS). Merged 4b7f2ac. S1–S8 (all pre-gate foundation) complete.
+  Next: **S9 Dice slice** → **S10 HUMAN REVIEW GATE** (STOP for explicit go before S11–S24).
