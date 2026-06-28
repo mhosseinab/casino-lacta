@@ -1,3 +1,4 @@
+import { lazy } from 'react';
 import type { ComponentType, LazyExoticComponent } from 'react';
 
 // =========================================================================== //
@@ -17,10 +18,21 @@ import type { ComponentType, LazyExoticComponent } from 'react';
 export type GameView = LazyExoticComponent<ComponentType>;
 
 /**
+ * Wraps `React.lazy` so a per-game step appends EXACTLY ONE line to `gameViews`
+ * (no separate `import { lazy }` churn per step). The loader code-splits the view
+ * into its own chunk.
+ */
+export function gameView(
+  loader: () => Promise<{ default: ComponentType }>,
+): GameView {
+  return lazy(loader);
+}
+
+/**
  * gameId → lazy view. Intentionally EMPTY at S5 — the per-game steps populate it.
  *
  * To register a game, add one line, e.g.:
- *   'originals.dice': lazy(() => import('./dice/DiceView')),
+ *   'originals.dice': gameView(() => import('./dice/DiceView')),
  *
  * >>> APPEND NEW GAME VIEWS BELOW THIS LINE (one per step) <<<
  */
