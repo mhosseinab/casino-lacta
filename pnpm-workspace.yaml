@@ -1,6 +1,8 @@
 packages:
   - "client"
   - "packages/*"
-allowBuilds:
-  '@biomejs/biome': set this to true or false
-  lefthook: set this to true or false
+verifyDepsBeforeRun: false
+onlyBuiltDependencies:
+  - "@biomejs/biome"
+  - esbuild
+  - lefthook
