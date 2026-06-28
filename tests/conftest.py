@@ -19,6 +19,8 @@ from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import User, Wallet
@@ -33,6 +35,21 @@ DATABASE_URL = os.environ.get(
 @pytest.fixture
 async def session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     engine = make_engine(DATABASE_URL)
+    # Probe the connection at fixture SETUP so a missing/unreachable Postgres yields a
+    # clear SKIP ("run alembic upgrade head against a live DB") instead of a misleading
+    # mid-test connection FAILURE — the latter has been repeatedly misread as a real
+    # seed/assertion regression. CI runs against a live service DB, so nothing skips
+    # there; only a genuinely unreachable DB (e.g. a local/worker run with no Postgres)
+    # is skipped. Connection-class errors ONLY — any other error still propagates.
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except (OSError, OperationalError, InterfaceError, DBAPIError) as exc:
+        await engine.dispose()
+        pytest.skip(
+            f"no Postgres reachable at {DATABASE_URL} ({type(exc).__name__}); "
+            "DB-dependent test skipped — start Postgres and `alembic upgrade head`."
+        )
     try:
         yield make_session_factory(engine)
     finally:
