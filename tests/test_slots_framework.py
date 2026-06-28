@@ -190,6 +190,52 @@ def test_ways_multiplies_by_number_of_ways() -> None:
     assert out.multiplier == 8.0
 
 
+def test_ways_wild_inflates_per_reel_count() -> None:
+    # reel0 [A,A] (A count 2), reel1 [A,W] (A + wild → count 2), reel2 [A,B]
+    # (A count 1): the wild contributes to reel1's A count, so ways = 2·2·1 = 4 and
+    # A×3 pays 4× → 4·4 = 16×. Binds the `or cell == wild` ways substitution path
+    # (delete it and reel1's count is 1 → ways 2 → 8×, so this asserts != 8).
+    params = {
+        "reels": 3,
+        "rows": 2,
+        "mode": "ways",
+        "strips": [["A", "A"], ["A", "W"], ["A", "B"]],
+        "symbols": ["A", "B", "W"],
+        "paytable": {"A": {"3": 4.0}},
+        "wild": "W",
+        "scatter": None,
+    }
+    out = SlotMachine().play({}, SequenceRng([0.0, 0.0, 0.0]), _cfg(params))
+    assert out.detail["grid"] == [["A", "A"], ["A", "W"], ["A", "B"]]
+    assert out.detail["wayWins"] == [
+        {"symbol": "A", "reels": 3, "ways": 4, "multiplier": 16.0}
+    ]
+    assert out.multiplier == 16.0
+
+
+def test_all_wild_line_pays_the_wild_paytable_row() -> None:
+    # A line of pure wilds has no non-wild symbol → the paying symbol falls back to
+    # the wild itself and pays the wild's own paytable row. Binds the all-wild
+    # fallback (without it the line resolves to no paying symbol → 0).
+    params = {
+        "reels": 3,
+        "rows": 1,
+        "mode": "lines",
+        "strips": [["W"], ["W"], ["W"]],
+        "symbols": ["W"],
+        "paytable": {"W": {"3": 7.0}},
+        "paylines": [[0, 0, 0]],
+        "wild": "W",
+        "scatter": None,
+    }
+    out = SlotMachine().play({}, SequenceRng([0.0, 0.0, 0.0]), _cfg(params))
+    assert out.detail["grid"] == [["W"], ["W"], ["W"]]
+    assert out.detail["lineWins"] == [
+        {"line": 0, "symbol": "W", "count": 3, "multiplier": 7.0}
+    ]
+    assert out.multiplier == 7.0
+
+
 def test_ways_no_win_when_run_too_short() -> None:
     # reel0 [A,A], reel1 [B,B], reel2 [A,A]: A run breaks at reel1 → run=1, no
     # paytable["A"]["1"] → no way win, multiplier 0.
