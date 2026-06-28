@@ -398,8 +398,24 @@ def test_public_view_hides_hole_card_while_active() -> None:
     # Only the up card is surfaced; the hole card must not appear anywhere in the view.
     assert "dealerHole" not in view
     assert view.get("dealer") in (None, [state["dealer"][0]])
-    assert "legalActions" in view
     assert set(view["legalActions"]) == set(legal_actions(state))
+    # The undrawn shoe must NOT leak: the shoe is the remainder of a KNOWN D-deck
+    # composition, so leaking it deterministically reveals the hole-card rank by
+    # deduction (a shoe leak IS a hole-card leak). Assert the ACTIVE view's key set is
+    # EXACTLY the intended public allowlist, so any future field must be deliberately
+    # whitelisted here (leak-proof) — and call out the shoe explicitly.
+    assert "shoe" not in view
+    assert set(view) == {
+        "status",
+        "phase",
+        "dealerUp",
+        "dealerUpValue",
+        "hands",
+        "active",
+        "insuranceBet",
+        "totalWagered",
+        "legalActions",
+    }
 
 
 def test_public_view_discloses_dealer_at_terminal() -> None:
