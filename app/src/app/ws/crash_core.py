@@ -25,12 +25,13 @@ tick NEVER feeds back into C (no client input, no wall-clock value influences C)
 
 Seed *generation* (CSPRNG via ``secrets``) lives in the shell (app), never here.
 
-S19 NOTE — persistence is a straight mirror of this tuple, written at round START
-(seed committed before the outcome is known): persist
-``(round_id, round_number, round_server_seed, server_seed_hash, C, status)``. Reuse
-the existing ``GameRound`` (a MULTIPLAYER discriminator) + a nullable per-round
-seed column (or JSONB) rather than a parallel crash-only table; re-settle = re-run
-``CrashRound.open(...)`` from the persisted seed. S18 persists NOTHING (no bet yet).
+S19 — persistence is a straight mirror of this tuple, written at round START (seed
+committed before the outcome is known): ``app.ws.crash_bets.open_crash_round``
+writes a ``GameRound`` row (a MULTIPLAYER discriminator; ``id = round_id``,
+``nonce = round_number``) whose existing server-ONLY ``server_state`` JSONB (never
+serialized to a client) holds ``{roundSeed, roundNumber, C}`` — no schema change.
+Re-settle = re-run ``CrashRound.open(...)`` from the persisted seed. S18 persists
+NOTHING (no bet yet).
 """
 
 from __future__ import annotations
