@@ -110,3 +110,22 @@ P7 Polish & ship
   `casino-client/S1` ref pointing at an abandoned polluted commit. Harmless to the branch tips; clean
   on a normal host with `git worktree prune`, `git branch -D casino-client/S1`, and
   `find .git -name '*.lock*' -delete`.
+- 2026-06-28 (resume): **Mount changed** — cc-main was registered under a now-dead `/sessions/...`
+  path; repo is now at `/Users/zen/workspace/casino-lacta`. REPAIRED worktree linkage by rewriting
+  two pointer files to the current path: `.worktrees/cc-main/.git` →
+  `gitdir: /Users/zen/workspace/casino-lacta/.git/worktrees/cc-main`, and
+  `.git/worktrees/cc-main/gitdir` → `/Users/zen/workspace/casino-lacta/.worktrees/cc-main/.git`.
+  On a future mount change, redo this. Active stale locks were renamed aside
+  (`mv .git/<f>.lock .git/<f>.lock.aside.*`): `packed-refs.lock`, `objects/maintenance.lock`,
+  `worktrees/cc-main/HEAD.lock`. ALSO: edit/commit the progress file in the cc-main worktree, NOT the
+  shared top-level tree (it is detached + off-limits).
+- 2026-06-28 (resume): **Toolchain fix committed `10b140f`** on `casino-client/main`. pnpm 11's
+  auto-generated `allowBuilds` stub in `pnpm-workspace.yaml` was malformed (placeholder text), so
+  `pnpm install` exited 1 on `ERR_PNPM_IGNORED_BUILDS`, and `verify-deps-before-run` cascaded that
+  into every `pnpm exec`. Fixed with `verifyDepsBeforeRun: false` + a valid `onlyBuiltDependencies`
+  allow-list. Verified on cc-main: `pnpm install` runs, and `pnpm exec` tsc/vitest/build/biome all
+  green. Step worktrees branch from this commit so they inherit the fix. **Workers must `pnpm install`
+  first in a cold worktree** (exec no longer auto-installs).
+- 2026-06-28 (resume): Foundation steps S2/S3/S6 run **serially** with the orchestrator owning all git
+  ops (worktree add/commit/merge) — the unlink-blocked mount makes concurrent `.git` plumbing writes
+  the fragile point. Revisit parallelism for the post-S10 game fan-out.
