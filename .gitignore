@@ -25,3 +25,4 @@ client/dist/
 *.swp
 .idea/
 .vscode/
+.worktrees/
