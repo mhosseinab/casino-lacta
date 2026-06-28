@@ -17,6 +17,7 @@ from app.games.bet_loop import (
     StakeOutOfRange,
     assert_no_active_round,
     place_bet,
+    stateful_round_view,
     step_action,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "StakeOutOfRange",
     "assert_no_active_round",
     "place_bet",
+    "stateful_round_view",
     "step_action",
 ]

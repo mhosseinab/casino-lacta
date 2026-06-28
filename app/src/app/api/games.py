@@ -16,7 +16,7 @@ cannot bet as, or read the state of, another user.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,11 +36,12 @@ from app.games import (
     RoundTerminal,
     StakeOutOfRange,
     place_bet,
+    stateful_round_view,
     step_action,
 )
 from app.wallet import InsufficientFunds, Ledger, WalletNotFound
-from engine.registry import UnknownGame
-from engine.types import InvalidBetInput
+from engine.registry import UnknownGame, load_game
+from engine.types import InvalidBetInput, StatefulGame
 
 router = APIRouter(prefix="/games", tags=["games"])
 
@@ -116,14 +117,17 @@ async def post_bet(
 
 
 class ActionRequest(BaseModel):
-    """The /action intent for a stateful round (reveal / cashout). Identity comes from
-    the token, NEVER the body; the server decides the outcome from its held state."""
+    """The /action intent for a stateful round (Mines reveal/cashout, HiLo guess/cashout).
+    Identity comes from the token, NEVER the body; the server decides the outcome from its
+    held state. Per-game fields (``cell`` for Mines, ``side`` for HiLo) are optional —
+    each game validates the ones it needs in its pure ``step`` (the router stays generic)."""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
     round_id: str
     op: str
     cell: int | None = None
+    side: str | None = None
 
 
 @router.post("/{game_id}/action")
@@ -133,12 +137,15 @@ async def post_action(
     request: Request,
     current: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Advance a stateful round (Mines reveal/cashout). Returns the safe client-facing
-    projection only — never the hidden layout. Identity is server-authoritative."""
+    """Advance a stateful round (Mines reveal/cashout, HiLo guess/cashout). Returns the
+    safe client-facing projection only — never hidden state. Identity is
+    server-authoritative."""
     rt = _runtime(request)
     action: dict[str, Any] = {"op": body.op}
     if body.cell is not None:
         action["cell"] = body.cell
+    if body.side is not None:
+        action["side"] = body.side
     try:
         return await step_action(
             rt.session_factory,
@@ -180,9 +187,16 @@ async def get_state(
         )
     if round_row is None:
         raise HTTPException(status_code=404, detail="no round for this user/game")
-    # REDACTION: only the client-facing safe projection is serialized. The server-only
-    # `server_state` column (the Mines mine layout) is deliberately NEVER returned, so
-    # a mid-round caller cannot infer an unrevealed mine.
+    # REDACTION: a stateful round's snapshot is the GAME's own ``public_view`` of the
+    # current opaque state (HiLo surfaces its shown card; Mines never an unrevealed cell
+    # while ACTIVE). The server-only ``server_state`` envelope is never serialized raw,
+    # so a mid-round caller cannot infer hidden info. Instant rounds have no server_state
+    # — their settled ``outcome`` is already public.
+    if round_row.server_state is not None:
+        game = cast("StatefulGame", load_game(game_id))
+        outcome: dict[str, Any] = stateful_round_view(game, round_row.server_state)
+    else:
+        outcome = dict(round_row.outcome or {})
     return {
         "roundId": round_row.id,
         "gameId": round_row.game_id,
@@ -190,5 +204,5 @@ async def get_state(
         "nonce": round_row.nonce,
         "configVersion": round_row.config_version,
         "input": round_row.input,
-        "outcome": round_row.outcome,
+        "outcome": outcome,
     }

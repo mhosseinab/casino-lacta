@@ -26,6 +26,7 @@ from urllib.parse import urlencode
 
 from engine.fairness import verify
 from engine.registry import default_config, load_game
+from engine.rng import create_rng
 from engine.types import GameConfig, InstantGame, Outcome, StatefulGame
 
 # Human-readable derivation strings surfaced by GET /fairness (spec §2.10) so a
@@ -106,6 +107,42 @@ def reproduce_stateful_init(
     )
 
 
+def reproduce_stateful_sequence(
+    *,
+    server_seed: bytes,
+    client_seed: str,
+    nonce: int,
+    game_id: str,
+    actions: list[dict[str, Any]],
+    input: dict[str, Any] | None = None,
+    cfg: GameConfig | None = None,
+) -> tuple[dict[str, Any], list[Outcome | None]]:
+    """Replay a ``StatefulGame``'s FULL round — ``init`` then the whole step SEQUENCE —
+    driving ONE seeded stream forward through the given ``actions``.
+
+    This is the load-bearing parity for games that draw fresh entropy per action
+    (HiLo's next card): the verifier reuses ``engine`` verbatim, constructing the same
+    stream the server opened the round with and advancing it through the identical
+    actions, so the drawn cards / cumulative multipliers equal the server's bit-for-bit.
+    Reproducing only ``init`` (the first card) would be vacuous on the part that matters
+    — the per-step draws. Returns ``(final_state, [outcome per action])``; ``cfg``
+    defaults to the engine registry default (pass the AUDITED config for a historical
+    round).
+    """
+    game = load_game(game_id)
+    if not hasattr(game, "init"):  # instant games replay via reproduce()
+        raise ValueError(f"{game_id!r} is not a stateful game; use reproduce()")
+    stateful = cast("StatefulGame", game)
+    config = cfg if cfg is not None else default_config(game_id)
+    rng = create_rng(server_seed, client_seed, nonce)
+    state = stateful.init(dict(input or {}), rng, config)
+    outcomes: list[Outcome | None] = []
+    for action in actions:
+        state, outcome = stateful.step(state, action, rng)
+        outcomes.append(outcome)
+    return state, outcomes
+
+
 def reproduce_round(
     *,
     server_seed: bytes,
@@ -150,5 +187,6 @@ __all__ = [
     "reproduce",
     "reproduce_round",
     "reproduce_stateful_init",
+    "reproduce_stateful_sequence",
     "verifier_link",
 ]

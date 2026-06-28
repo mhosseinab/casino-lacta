@@ -101,13 +101,19 @@ class Mines:
         }
 
     def step(
-        self, state: dict[str, Any], action: dict[str, Any]
+        self, state: dict[str, Any], action: dict[str, Any], rng: RngStream
     ) -> tuple[dict[str, Any], Outcome | None]:
         """Advance the round by one action; return ``(next_state, Outcome)``.
 
         ``Outcome`` is always present for Mines (every action yields a client-facing
         projection in ``detail``). ``detail["status"]`` is the generic settlement
-        signal the app reads to drive credit/round-status."""
+        signal the app reads to drive credit/round-status.
+
+        ``rng`` is part of the :class:`~engine.types.StatefulGame` seam (symmetric to
+        :meth:`init`) but Mines IGNORES it: the whole mine layout is committed at
+        ``init``, so no action draws fresh entropy and the stream cursor stays at ``M``.
+        A reveal merely looks up a pre-committed cell."""
+        del rng  # Mines' randomness is fully committed at init (cursor unchanged).
         if state["status"] != _ACTIVE:
             raise InvalidBetInput(f"round is terminal ({state['status']}); no further actions")
 
@@ -171,6 +177,31 @@ class Mines:
                 "minePositions": list(state["mine_positions"]),  # terminal disclosure
             },
         )
+
+    def public_view(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The client-safe round snapshot (for ``/bet`` open + ``/state`` resume).
+
+        Re-expresses S12's redaction in ONE place: while ACTIVE it exposes only
+        ``{status, k, revealed}`` plus the multipliers (pure functions of the public
+        ``(M, k)``) — NEVER an unrevealed cell. At a TERMINAL status it discloses
+        ``minePositions`` (the round is over; disclosure is the point of provable
+        fairness). ``M`` is the player's own bet input, so it is public."""
+        status = str(state["status"])
+        mines = int(state["mines"])
+        edge = float(state["edge"])
+        revealed = list(state["revealed"])
+        k = len(revealed)
+        view: dict[str, Any] = {"status": status, "k": k, "revealed": revealed}
+        if status == _ACTIVE:
+            if k >= 1:
+                view["currentMultiplier"] = _payout_multiplier(mines, k, edge)
+            if k < GRID_SIZE - mines:
+                view["nextMultiplier"] = _payout_multiplier(mines, k + 1, edge)
+        else:  # terminal disclosure — provable fairness
+            view["minePositions"] = sorted(state["mine_positions"])
+            if status == _CASHED_OUT:
+                view["multiplier"] = _payout_multiplier(mines, k, edge)
+        return view
 
     @staticmethod
     def _safe_outcome(mines: int, k: int, cell: int, edge: float) -> Outcome:
