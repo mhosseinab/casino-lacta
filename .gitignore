@@ -23,6 +23,46 @@ client/dist/
 # OS / editor
 .DS_Store
 *.swp
+*.swo
 .idea/
 .vscode/
-.worktrees/
+*.bak
+*.tmp
+*.orig
+*~
+Thumbs.db
+
+# Logs / runtime junk
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage / test artifacts
+.coverage
+coverage/
+htmlcov/
+*.cover
+.tox/
+.nox/
+
+# Local DB / cache files
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+redis-dump.rdb
+
+# Build / tooling junk
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+*.lcov
+
+# Misc scratch
+scratch/
+.scratch/
+.casino-wt
+.worktrees
