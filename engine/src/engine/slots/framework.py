@@ -64,12 +64,18 @@ from engine.types import GameConfig, Outcome, RngStream
 
 @dataclass(frozen=True)
 class SlotMachine:
-    """Designed to conform to ``engine.types.InstantGame`` (spec §B.1) — S23 supplies
-    the ``id`` when a concrete machine registers; the framework itself carries none.
+    """Conforms to ``engine.types.InstantGame`` (spec §B.1). ONE config-driven
+    evaluator serves EVERY machine — machine identity is the registry id + the DB
+    ``GameConfig``, never per-machine engine code (S23 ``slots.machine01``, S24
+    ``machine02``/``03`` are "config + art, not code"). The ``id`` field is therefore
+    generic and INFORMATIONAL: the bet loop resolves a game by its registry key and
+    feeds the per-machine ``cfg.params``; the engine never branches on ``id``.
 
     Stateless and config-driven: every machine is a distinct ``GameConfig`` fed to
     the same evaluator (``validate_input`` + ``play`` match the seam shape already).
     """
+
+    id: str = "slots"
 
     def validate_input(self, input: dict[str, Any], cfg: GameConfig) -> None:
         """No per-bet game input: a spin's only variable is stake (fenced by the
@@ -220,3 +226,11 @@ def _eval_scatter(
     if not mult:
         return 0.0, None
     return float(mult), {"symbol": scatter, "count": count, "multiplier": float(mult)}
+
+
+# The shared singleton the registry resolves for EVERY ``slots.*`` machine (one
+# framework, N machines — see :class:`SlotMachine`). Each machine entry in
+# ``engine.registry`` points here; the per-machine config arrives at runtime from
+# the authoritative DB ``GameConfig`` (seeded from the machine's JSON), so this one
+# instance settles every machine without per-machine engine code.
+GAME = SlotMachine()

@@ -148,6 +148,17 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
         "engine.table.blackjack",
         GameConfig(edge=0.004, params=_blackjack_default_params),
     ),
+    # Slots — machine01 (spec §B.1). ONE config-driven framework (engine.slots.framework
+    # GAME) serves EVERY machine: machine identity is THIS registry key + the DB
+    # GameConfig, never per-machine engine code (S24 adds machine02/03 as new entries
+    # pointing here + their own config — "config + art, not code"). The strips/paytable/
+    # paylines/feature live in engine/src/engine/slots/machines/machine01.json as INERT
+    # DATA — engine purity forbids reading a file here, so the registry default carries
+    # NO params; the JSON is loaded app-side (app.slots.load_machine) and seeded into the
+    # authoritative DB GameConfig.params (the sole runtime authority — no Python-literal
+    # copy to drift from). ``edge`` mirrors the JSON house edge (RTP 0.96), informational:
+    # slot RTP emerges from the strips/paytable, never from ``edge``.
+    "slots.machine01": ("engine.slots.framework", GameConfig(edge=0.04, params={})),
 }
 
 
