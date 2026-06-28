@@ -371,12 +371,11 @@ def test_public_view_hides_pool_while_active_reveals_at_terminal() -> None:
     view = _game().public_view(state)
     assert view["status"] == "ACTIVE"
     assert view["dealtCards"] == list(state["dealt"])  # dealt 5 are public
-    # the committed replacement cards (the secret upcoming draws) are NEVER surfaced.
-    assert "pool" not in view
-    assert "finalCards" not in view
-    flat = str(view)
-    for hidden in state["pool"]:
-        assert f"Card.from_index({hidden})" not in flat
+    # The whitelist IS the redaction contract: while ACTIVE the only keys are status +
+    # the dealt 5, so the committed replacement pool (the secret upcoming draws) cannot
+    # leak through any field. (Asserting key-equality, not substring absence, makes this
+    # non-vacuous — a leaked pool would add a key and fail.)
+    assert set(view) == {"status", "dealtCards"}
     state2, _ = _game().step(state, {"op": "draw", "holds": [0]}, rng)
     term = _game().public_view(state2)
     assert term["status"] in {"CASHED_OUT", "LOST"}
@@ -506,21 +505,6 @@ def test_high_pair_hold_beats_kicker_chasing() -> None:
     pair_only = hand_ev(dealt, [0, 1])
     assert pair_only > 1.0  # a guaranteed JoB (1.0) plus upside from trips/quads/2pair
     assert pair_only > hand_ev(dealt, [0, 1, 2])  # the 8 kicker only hurts
-
-
-def test_optimal_for_fixtures_rtp_is_well_above_one() -> None:
-    """The 'always-optimal-for-fixtures' return — the mean optimal EV over the curated
-    deals. Each is a high-EV spot, so the strategy's RTP on this fixture set is well
-    above 1.0 (these are favourable holds, not a uniform deal sample). The point is the
-    exact paytable→EV linkage, asserted per fixture above; this aggregates it."""
-    fixtures = [
-        ([idx(c) for c in ("As", "Ks", "Qs", "Js", "2h")], [0, 1, 2, 3]),
-        ([idx(c) for c in ("As", "9s", "7s", "5s", "3s")], [0, 1, 2, 3, 4]),
-        ([idx(c) for c in ("Js", "Jh", "8d", "5c", "2s")], [0, 1]),
-    ]
-    evs = [hand_ev(d, h) for d, h in fixtures]
-    rtp = sum(evs) / len(evs)
-    assert rtp > 1.0
 
 
 # --------------------------------------------------------------------------- #
