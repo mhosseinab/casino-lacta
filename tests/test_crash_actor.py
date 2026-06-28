@@ -14,15 +14,23 @@ import asyncio
 import hashlib
 import json
 from contextlib import suppress
+from typing import cast
 
+import pytest
+from starlette.websockets import WebSocket
+
+import app.ws.crash as crash_mod
 from app.ws.crash import (
+    CRASH_CHANNEL,
     DEFAULT_CRASH_EDGE,
     CrashActor,
     InMemoryPubSub,
     RoundTimings,
     _pump,
     cosmetic_multiplier,
+    crash_ws,
 )
+from app.ws.crash_core import RoundStatus
 from engine.fairness import commit
 from engine.games._curve import crash_point
 from verifier import reproduce_round
@@ -30,6 +38,9 @@ from verifier import reproduce_round
 # A fixed seed whose round-1 crash point is 2.49× — enough cosmetic ticks to climb,
 # not an instant bust (which would legitimately emit zero ticks).
 _FIXTURE_SEED = b"actor-fixture-seed"
+# A fixed seed whose round-1 crash point is EXACTLY 1.00× (f < edge → instant bust):
+# the round must crash with ZERO cosmetic ticks.
+_BUST_SEED = b"bust-56"
 _INSTANT_TIMINGS = RoundTimings(waiting=0.0, tick_interval=0.0, settle=0.0)
 
 
@@ -58,6 +69,26 @@ async def test_actor_runs_one_round_and_publishes_round_tick_crash() -> None:
     assert types[-1] == "crash"
     assert "tick" in types  # C = 2.49 → the cosmetic curve climbs before the crash
     assert rnd.C == 2.49
+    assert rnd.status is RoundStatus.SETTLED  # CRASHED→SETTLED actually exercised
+
+
+async def test_instant_bust_round_publishes_zero_ticks() -> None:
+    """C == 1.00 (instant bust, f < edge): the round crashes immediately with NO
+    cosmetic ticks. A regression of the loop's `cosmetic >= C` guard to `> C`
+    would emit a 1.00× tick first and break this (round→tick→crash)."""
+    broker = InMemoryPubSub()
+    actor = CrashActor(
+        broker,
+        seed_factory=lambda: _BUST_SEED,
+        id_factory=lambda n: f"round-{n}",
+        timings=_INSTANT_TIMINGS,
+        sleep=_noop_sleep,
+    )
+    rnd = await actor.run_round(1)
+    assert rnd.C == 1.00
+
+    types = [json.loads(message)["type"] for _channel, message in broker.log]
+    assert types == ["round", "crash"]  # nothing emitted between WAITING and CRASH
 
 
 async def test_waiting_event_commits_without_revealing_seed_or_C() -> None:
@@ -154,3 +185,41 @@ async def test_pump_forwards_subscribed_messages_to_the_ws_sink() -> None:
         await task
 
     assert sink == ["a", "b"]
+
+
+class _FakeWebSocket:
+    """A minimal WebSocket double: records accept + the text frames sent."""
+
+    def __init__(self) -> None:
+        self.accepted = False
+        self.sent: list[str] = []
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def send_text(self, message: str) -> None:
+        self.sent.append(message)
+
+
+async def test_crash_ws_endpoint_accepts_and_streams_channel_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end of the real ``crash_ws`` handler (not just ``_pump``): it accepts
+    the socket, resolves its broker via ``_get_broker``, subscribes to
+    ``CRASH_CHANNEL``, and forwards every published event to the client. Driven on
+    one event loop with the in-memory broker — no Redis, no TestClient cross-loop."""
+    broker = InMemoryPubSub()
+    monkeypatch.setattr(crash_mod, "_get_broker", lambda: broker)
+    websocket = _FakeWebSocket()
+
+    task = asyncio.create_task(crash_ws(cast("WebSocket", websocket)))
+    await asyncio.sleep(0)  # accept() + enter subscribe() before publishing
+    await broker.publish(CRASH_CHANNEL, "evt-1")
+    await broker.publish(CRASH_CHANNEL, "evt-2")
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    assert websocket.accepted
+    assert websocket.sent == ["evt-1", "evt-2"]

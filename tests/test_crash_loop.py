@@ -28,7 +28,12 @@ import math
 
 import pytest
 
-from app.ws.crash_core import CrashRound, crash_point_for_round
+from app.ws.crash_core import (
+    CrashRound,
+    InvalidTransition,
+    RoundStatus,
+    crash_point_for_round,
+)
 from engine.games._curve import crash_point
 from engine.rng import create_rng
 from verifier import reproduce_round
@@ -156,3 +161,53 @@ def test_crash_point_for_round_is_deterministic() -> None:
     a = crash_point_for_round(_SEED, "round-7", 7, EDGE)
     b = crash_point_for_round(_SEED, "round-7", 7, EDGE)
     assert a == b
+
+
+# --------------------------------------------------------------------------- #
+# State-machine transition guard — the enforcement that stops a downstream actor
+# (S19 cashout / S32 poker) from running or settling a round out of order. Each
+# test below FAILS if `_transition`'s InvalidTransition guard is removed.
+# --------------------------------------------------------------------------- #
+def _open_round() -> CrashRound:
+    return CrashRound.open(
+        round_server_seed=_SEED, round_id="round-1", round_number=1, edge=EDGE
+    )
+
+
+def test_start_from_waiting_skipping_lock_is_rejected() -> None:
+    """RUNNING a round whose betting window never closed (WAITING→RUNNING) must
+    raise — the guard prevents starting an un-locked round."""
+    rnd = _open_round()
+    assert rnd.status is RoundStatus.WAITING
+    with pytest.raises(InvalidTransition):
+        rnd.start()
+
+
+def test_settling_an_unrun_round_is_rejected() -> None:
+    """Settling a round that never ran (LOCKED→SETTLED skip) must raise — the
+    guard that stops a downstream actor from settling an un-run/already-settled
+    round."""
+    locked = _open_round().lock()
+    assert locked.status is RoundStatus.LOCKED
+    with pytest.raises(InvalidTransition):
+        locked.settle()
+
+
+def test_crash_before_running_is_rejected() -> None:
+    """Crashing (revealing) a round that is not RUNNING must raise."""
+    with pytest.raises(InvalidTransition):
+        _open_round().crash()
+
+
+def test_legal_transition_path_reaches_settled() -> None:
+    """The full legal path WAITING→LOCKED→RUNNING→CRASHED→SETTLED is accepted."""
+    rnd = _open_round()
+    assert rnd.status is RoundStatus.WAITING
+    rnd = rnd.lock()
+    assert rnd.status is RoundStatus.LOCKED
+    rnd = rnd.start()
+    assert rnd.status is RoundStatus.RUNNING
+    rnd = rnd.crash()
+    assert rnd.status is RoundStatus.CRASHED
+    rnd = rnd.settle()
+    assert rnd.status is RoundStatus.SETTLED
