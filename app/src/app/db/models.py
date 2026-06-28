@@ -234,6 +234,39 @@ class AuditEvent(Base):
     )
 
 
+class RgProfile(Base):
+    """Per-user responsible-gaming profile — the DURABLE, self-imposed policy the
+    pre-bet gate (``app.rg.can_bet``) enforces server-side (S38).
+
+    All money columns are minor units (BIGINT); never a float. Every column is
+    nullable/absent-by-default: a user with no row (or all-NULL fields) is
+    unconstrained, so the gate never falsely blocks a player who set no limits.
+    ``self_excluded_until`` / ``cool_off_until`` are standing/temporary timed
+    blocks compared against the request clock; the live per-session elapsed
+    timer that drives the session-time limit + ``session.elapsed`` reality-check
+    lives in Redis (see ``app.rg.gate``)."""
+
+    __tablename__ = "rg_profiles"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    # Self-imposed limits (minor units / seconds); NULL = no limit of that kind.
+    spend_limit_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    loss_limit_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    session_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Reality-check cadence: emit ``session.elapsed`` every N seconds of play.
+    reality_check_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Timed blocks (standing / temporary); NULL or past = not blocking.
+    self_excluded_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cool_off_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class PokerTable(Base):
     """Poker table (stub for now — Redis during play, checkpointed; A.x)."""
 
@@ -255,3 +288,24 @@ class Jackpot(Base):
     game_id: Mapped[str] = mapped_column(String(64), index=True)
     pool_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     pop_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class LeaderboardSnapshot(Base):
+    """A durable, point-in-time capture of one leaderboard (S37).
+
+    Redis sorted sets are the live boards; :func:`app.economy.leaderboards.snapshot`
+    persists the top-N of each to this table so a Redis flush does not lose history. Rows
+    captured together share one ``snapshot_id`` (one row per board). ``entries`` is the
+    ranked top-N as ``[{userId, score, rank}]`` where ``score`` is integer minor units —
+    no float is ever persisted."""
+
+    __tablename__ = "leaderboard_snapshots"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(64), index=True)
+    board: Mapped[str] = mapped_column(String(32))
+    currency: Mapped[str] = mapped_column(String(16))
+    entries: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

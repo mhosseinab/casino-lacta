@@ -213,11 +213,15 @@ async def place_crash_bet(
     if existing is not None:
         return _result(existing)
 
-    decision = can_bet(
-        user_id=user_id, game_id=CRASH_GAME_ID, stake_minor=stake_minor, currency=currency
+    decision = await can_bet(
+        session_factory,
+        user_id=user_id,
+        game_id=CRASH_GAME_ID,
+        stake_minor=stake_minor,
+        currency=currency,
     )
     if not decision.allowed:
-        raise CrashBetRejected(decision.reason or "blocked by responsible-gaming policy")
+        raise CrashBetRejected(str(decision.reason) if decision.reason else "RG_BLOCKED")
 
     key_debit = _idempotency_key(bet_id, "WAGER")
     key_credit = _idempotency_key(bet_id, "WIN")
