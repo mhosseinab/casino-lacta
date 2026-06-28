@@ -99,6 +99,22 @@ async def _make_funded_user(
     return uid, wid
 
 
+# A floor for the round's crash point ``C`` in tests that derive auto-cashout /
+# stamp targets as ``round(C ± 0.01, 2)``. Keeping C comfortably above 1.00 makes
+# those targets stay ≥ 1.00 (the placement floor), so the test is DETERMINISTIC and
+# never flakes on a near-1.00 ``C`` (the ~2% tail; P(C≥1.5)=(1-edge)/1.5≈0.66).
+_MIN_TEST_C = 1.5
+
+
+def _round_id_with_safe_C(round_number: int) -> str:
+    """A random round id whose ``C`` (from ``_SEED``) is ≥ ``_MIN_TEST_C`` — so
+    ``round(C ± 0.01, 2)`` targets never fall below the 1.00 placement floor."""
+    while True:
+        candidate = f"round-{uuid4().hex}"
+        if crash_point_for_round(_SEED, candidate, round_number, EDGE) >= _MIN_TEST_C:
+            return candidate
+
+
 async def _open_round(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -107,7 +123,7 @@ async def _open_round(
 ) -> CrashRound:
     rnd = CrashRound.open(
         round_server_seed=_SEED,
-        round_id=round_id or f"round-{uuid4().hex}",
+        round_id=round_id or _round_id_with_safe_C(round_number),
         round_number=round_number,
         edge=EDGE,
     )
@@ -261,21 +277,24 @@ async def test_state_includes_live_cosmetic_multiplier_when_supplied(
     assert with_actor["round"]["multiplier"] == 1.42
 
 
-async def test_state_returns_none_round_when_no_crash_round(
+async def test_state_resolves_shared_round_with_empty_bets_for_new_user(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """A caller asking for state when this DB run has crash rounds belonging to other
-    callers still resolves the CURRENT shared round (not caller-scoped); the round is
-    only ``None`` if no crash round exists at all — exercised here by a brand-new user
-    on a populated DB still seeing the latest round but with an empty bet list."""
+    """The current round is SHARED (not caller-scoped): a brand-new user with no bets
+    still resolves the latest round, just with an empty ``bets`` list. (The ``round
+    is None`` → 404 branch only fires when NO crash round exists at all — trivial and
+    inspection-verified; the migrated DB always has rounds, so it is not exercised
+    here.)"""
     uid = f"u-{uuid4().hex}"
     async with session_factory() as session, session.begin():
         session.add(User(id=uid))
-    # If at least one crash round exists in this DB run, state.round is non-None and
-    # the new user simply has no bets in it (the shared-round, owner-scoped contract).
+    rnd = await _open_round(session_factory)  # ensure a current round exists
+
     state = await crash_state(session_factory, user_id=uid)
-    if state["round"] is not None:
-        assert state["bets"] == []
+
+    assert state["round"] is not None
+    assert state["round"]["roundId"] == rnd.round_id  # the just-opened shared round
+    assert state["bets"] == []  # the new user owns no bets in it
 
 
 # --------------------------------------------------------------------------- #
@@ -343,7 +362,11 @@ async def test_recover_settles_unsettled_orphan_and_avoids_id_collision(
     ``round-{n}`` (which would no-op ``open_crash_round`` and broadcast a new curve over
     the OLD persisted C)."""
     user_id, _wallet_id = funded_user
+    # Own a nonce above the current max (so recovery's max(nonce)+1 is predictable);
+    # advance it until C is safely > 1.00 so the ± 0.01 auto targets are valid.
     n = await _max_crash_nonce(session_factory) + 1
+    while crash_point_for_round(_SEED, f"round-{n}", n, EDGE) < _MIN_TEST_C:
+        n += 1
     orphan_id = f"round-{n}"
     rnd = await _open_round(session_factory, round_id=orphan_id, round_number=n)
     C = rnd.C
