@@ -15,6 +15,7 @@ import importlib
 from typing import cast
 
 from engine.games.keno import default_params as _keno_default_params
+from engine.table.roulette_wheel import default_params as _roulette_wheel_default_params
 from engine.types import GameConfig, InstantGame, StatefulGame
 
 # Plinko (spec §A.5) per-(rows, risk) multiplier tables — TUNED so the analytic
@@ -102,6 +103,15 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # params; default edge 0.01. The cumulative multiplier is unbounded in principle —
     # the real ceiling is the GOLD GameLimit max_win (enforced via engine.money.cap).
     "originals.hilo": ("engine.games.hilo", GameConfig(edge=0.01, params={})),
+    # European Roulette (spec §B.3): single-zero wheel, 37 pockets; one draw →
+    # pocket = floor(f·37); every inside/outside bet settles via the payout table in
+    # params (straight 35:1 … even-money 1:1), so per-bet RTP = (count/37)·(payout+1)
+    # = 36/37 by construction — pocket 0 is the whole 1/37 ≈ 2.70% edge. DISTINCT from
+    # the originals.roulette 0–99 colour-pick game (different wheel, different id).
+    "table.roulette": (
+        "engine.table.roulette_wheel",
+        GameConfig(edge=1.0 / 37.0, params=_roulette_wheel_default_params()),
+    ),
 }
 
 
