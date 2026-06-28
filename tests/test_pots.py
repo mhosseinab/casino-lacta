@@ -20,6 +20,7 @@ purity forbids ``random``.
 
 from __future__ import annotations
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -37,6 +38,34 @@ def test_no_contributions_build_is_empty() -> None:
 
 def test_award_no_pots_is_empty() -> None:
     assert award_pots([], {}) == {}
+
+
+def test_award_raises_when_no_eligible_player_anywhere() -> None:
+    # Conservation last-line-of-defense: EVERY contributor folded, so no pot has an
+    # eligible winner and the chips have nowhere to go. Awarding must RAISE, not silently
+    # drop the chips (regressing the guard to `return awards` would vanish 200 chips).
+    pots = build_pots({0: 100, 1: 100}, folded={0, 1})
+    assert pots == [Pot(amount=200, eligible=())]  # chips in, eligible nowhere
+    with pytest.raises(ValueError, match="no eligible players"):
+        award_pots(pots, {0: 5, 1: 5})
+
+
+def test_build_pots_rejects_invalid_contributions() -> None:
+    # The minor-units fence: floats, bool-as-int, and negatives are not valid chip counts.
+    with pytest.raises(TypeError):
+        build_pots({0: 1.5, 1: 50})  # type: ignore[dict-item]  # float rejected
+    with pytest.raises(TypeError):
+        build_pots({0: True, 1: 50})  # bool is an int subclass — still rejected
+    with pytest.raises(ValueError, match=">= 0"):
+        build_pots({0: -10, 1: 50})  # negative rejected
+
+
+def test_award_raises_when_eligible_seat_missing_a_rank() -> None:
+    # award_pots must refuse to guess: an eligible seat with no rank is a caller bug.
+    pots = build_pots({0: 100, 1: 100}, set())
+    assert pots == [Pot(amount=200, eligible=(0, 1))]
+    with pytest.raises(ValueError, match="no hand rank"):
+        award_pots(pots, {0: 5})  # seat 1 is eligible but absent from ranks
 
 
 def test_single_layer_winner_takes_all() -> None:
