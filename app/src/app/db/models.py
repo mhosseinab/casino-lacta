@@ -234,6 +234,39 @@ class AuditEvent(Base):
     )
 
 
+class RgProfile(Base):
+    """Per-user responsible-gaming profile — the DURABLE, self-imposed policy the
+    pre-bet gate (``app.rg.can_bet``) enforces server-side (S38).
+
+    All money columns are minor units (BIGINT); never a float. Every column is
+    nullable/absent-by-default: a user with no row (or all-NULL fields) is
+    unconstrained, so the gate never falsely blocks a player who set no limits.
+    ``self_excluded_until`` / ``cool_off_until`` are standing/temporary timed
+    blocks compared against the request clock; the live per-session elapsed
+    timer that drives the session-time limit + ``session.elapsed`` reality-check
+    lives in Redis (see ``app.rg.gate``)."""
+
+    __tablename__ = "rg_profiles"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    # Self-imposed limits (minor units / seconds); NULL = no limit of that kind.
+    spend_limit_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    loss_limit_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    session_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Reality-check cadence: emit ``session.elapsed`` every N seconds of play.
+    reality_check_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Timed blocks (standing / temporary); NULL or past = not blocking.
+    self_excluded_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cool_off_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class PokerTable(Base):
     """Poker table (stub for now — Redis during play, checkpointed; A.x)."""
 

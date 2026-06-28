@@ -372,11 +372,15 @@ async def place_bet(
         return await _stateful_replay(session_factory, bet_id, game_id)
 
     # 3. RG gate BEFORE the debit — a deny moves no credits.
-    decision = can_bet(
-        user_id=user_id, game_id=game_id, stake_minor=stake_minor, currency=currency
+    decision = await can_bet(
+        session_factory,
+        user_id=user_id,
+        game_id=game_id,
+        stake_minor=stake_minor,
+        currency=currency,
     )
     if not decision.allowed:
-        raise RgDenied(decision.reason or "blocked by responsible-gaming policy")
+        raise RgDenied(str(decision.reason) if decision.reason else "RG_BLOCKED")
 
     # 3b. Stateful: open a server-held round (single debit, committed layout, ACTIVE).
     # The shared one-active-(user,game)-round guard runs BEFORE any money moves. It is
