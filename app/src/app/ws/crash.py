@@ -31,16 +31,28 @@ import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import redis.asyncio as redis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.ws.crash_core import CrashRound
+from app.ws.crash_bets import (
+    CrashBetResult,
+    manual_cashout,
+    open_crash_round,
+    place_crash_bet,
+    settle_crash_round,
+)
+from app.ws.crash_core import CrashRound, RoundStatus
 
-# House edge for Crash — config, not a buried literal. S19 NOTE: migrate this into
-# the authoritative DB GameConfig (the seeded originals.* rows carry edge=0.01);
-# the engine has no crash registry entry because S18 does not touch engine/.
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.wallet import Ledger
+
+# House edge for Crash. S19: the AUTHORITATIVE value now lives in the seeded
+# ``originals.crash`` DB GameConfig (migration f6a7b8c9d0e1, edge=0.01); this
+# constant is the actor's default when no config-driven edge is injected.
 DEFAULT_CRASH_EDGE = 0.01
 
 # Single partition → a single broadcast channel. Every app instance subscribes here.
@@ -49,6 +61,14 @@ CRASH_WS_PATH = "/games/originals.crash"
 
 _SEED_BYTES = 32
 _REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+
+class CrashBettingClosed(RuntimeError):
+    """A bet was attempted outside the WAITING window (server-authoritative gate)."""
+
+
+class CrashNotRunning(RuntimeError):
+    """A cash-out was attempted while the round was not RUNNING."""
 
 
 # --------------------------------------------------------------------------- #
@@ -231,6 +251,8 @@ class CrashActor:
         seed_factory: Callable[[], bytes] = _default_seed,
         id_factory: Callable[[int], str] = lambda n: f"round-{n}",
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
+        ledger: Ledger | None = None,
     ) -> None:
         self._publisher = publisher
         self._edge = edge
@@ -239,6 +261,17 @@ class CrashActor:
         self._seed_factory = seed_factory
         self._id_factory = id_factory
         self._sleep = sleep
+        # S19 money path: when both are wired, the actor persists each round at open
+        # and settles every bet at crash. Left None (S18 default), the actor is a
+        # pure presentation broadcaster — no betting, no DB (keeps S18 tests intact).
+        self._session_factory = session_factory
+        self._ledger = ledger
+        # The CURRENT round + its last-PUBLISHED cosmetic tick — the server's
+        # authoritative state for placement (WAITING) and manual cash-out (RUNNING).
+        # The cash-out multiplier is stamped from ``_current_multiplier`` SERVER-SIDE;
+        # a client never supplies a multiplier.
+        self._round: CrashRound | None = None
+        self._current_multiplier: float = 1.0
 
     async def _publish(self, event: dict[str, Any]) -> None:
         await self._publisher.publish(self._channel, json.dumps(event))
@@ -257,26 +290,92 @@ class CrashActor:
             round_number=round_number,
             edge=self._edge,
         )
+        self._round = rnd
+        self._current_multiplier = 1.0
+        # S19: persist the round tuple at START (committed before the outcome is
+        # broadcast) so placed bets can reference it and settlement re-derives C.
+        if self._persists:
+            await open_crash_round(self._session_factory, rnd)  # type: ignore[arg-type]
         # WAITING — broadcast the commitment (hash + roundId), reveal NOTHING else.
+        # Bets are placed in this window via ``place_bet`` (server-authoritative).
         await self._publish(_round_event(rnd))
         await self._sleep(self._timings.waiting)
 
-        rnd = rnd.lock().start()  # LOCKED → RUNNING
+        rnd = rnd.lock().start()  # LOCKED → RUNNING (betting window closed)
+        self._round = rnd
 
         tick = 0
         while True:
             multiplier = cosmetic_multiplier(tick, self._timings.growth)
             if multiplier >= rnd.C:  # the curve reached C → crash now
                 break
+            # Stamp the authoritative current value BEFORE publishing: a manual
+            # cash-out that lands now is settled at this last-published tick.
+            self._current_multiplier = multiplier
             await self._publish(_tick_event(rnd, multiplier))
             await self._sleep(self._timings.tick_interval)
             tick += 1
 
         rnd = rnd.crash()  # CRASHED — reveal the seed (it hashes to the commitment)
+        self._round = rnd
+        # S19: settle every still-ACTIVE bet against C (auto-cashout wins iff t ≤ C;
+        # everything else loses). Idempotent per bet — a re-settle is a pure replay.
+        if self._persists:
+            await settle_crash_round(self._session_factory, self._ledger, round_id=rnd.round_id)  # type: ignore[arg-type]
         await self._publish(_crash_event(rnd))
         await self._sleep(self._timings.settle)
 
-        return rnd.settle()
+        settled = rnd.settle()
+        self._round = settled
+        return settled
+
+    @property
+    def _persists(self) -> bool:
+        """The money path is active only when BOTH the DB and ledger are wired."""
+        return self._session_factory is not None and self._ledger is not None
+
+    async def place_bet(
+        self,
+        *,
+        user_id: str,
+        bet_id: str,
+        stake_minor: int,
+        currency: str = "GOLD",
+        mode: str = "PLAY",
+        auto_cashout: float | None = None,
+    ) -> CrashBetResult:
+        """Place a bet on the CURRENT round (only during WAITING). Server-authoritative,
+        single-debit, idempotent on ``bet_id``."""
+        if not self._persists:
+            raise RuntimeError("crash betting requires a session_factory + ledger")
+        if self._round is None or self._round.status is not RoundStatus.WAITING:
+            raise CrashBettingClosed("betting is only open during WAITING")
+        return await place_crash_bet(
+            self._session_factory,  # type: ignore[arg-type]
+            self._ledger,  # type: ignore[arg-type]
+            round_id=self._round.round_id,
+            user_id=user_id,
+            bet_id=bet_id,
+            stake_minor=stake_minor,
+            currency=currency,
+            mode=mode,
+            auto_cashout=auto_cashout,
+        )
+
+    async def cash_out(self, *, bet_id: str) -> CrashBetResult:
+        """Manually cash out a bet on the CURRENT (RUNNING) round. The multiplier is
+        the SERVER's last-published tick — the client sends ONLY ``bet_id``."""
+        if not self._persists:
+            raise RuntimeError("crash betting requires a session_factory + ledger")
+        if self._round is None or self._round.status is not RoundStatus.RUNNING:
+            raise CrashNotRunning("cash-out is only accepted while RUNNING")
+        return await manual_cashout(
+            self._session_factory,  # type: ignore[arg-type]
+            self._ledger,  # type: ignore[arg-type]
+            round_id=self._round.round_id,
+            bet_id=bet_id,
+            stamped_multiplier=self._current_multiplier,
+        )
 
     async def run_forever(self) -> None:
         """Run rounds back-to-back forever (the singleton partition entrypoint).
@@ -335,7 +434,9 @@ __all__ = [
     "CRASH_WS_PATH",
     "DEFAULT_CRASH_EDGE",
     "CrashActor",
+    "CrashBettingClosed",
     "CrashBroker",
+    "CrashNotRunning",
     "InMemoryPubSub",
     "RedisPubSub",
     "RoundTimings",
