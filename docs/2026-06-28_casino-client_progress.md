@@ -41,8 +41,8 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S1  | Scaffold Vite+React+TS client | passed | 1 | casino-client/main · wt cc-main | 2bce179 | tsc clean · vitest 2/2 · vite build→dist (142kB/46kB gz) · biome clean (run off-mount; mount blocks installer unlink) |
 | S2  | Generate contracts-ts from API OpenAPI | passed | 1 | merged → main | 6fc8a2a (merge dee998c) | @casino/contracts; `task contracts` deterministic; tsc RED→GREEN proven |
 | S3  | Money + minor-units utils | passed | 1 | merged → main | 88c11eb (merge c4c5013) | formatMinor/parseStakeToMinor; 14 tests; no float math (BigInt) |
-| S4  | Transport seam: GameClient + Http + Mock | pending | 0 | — | — | quarantine RNG to mock/; ELIGIBLE NOW (S2,S3 passed) |
-| S5  | App shell, lobby, auth/balance, badges | pending | 0 | — | — | balance from /auth/me; needs S4 |
+| S4  | Transport seam: GameClient + Http + Mock | passed | 1 | merged → main | d234add (merge 295c20d) | RNG quarantined to mock/; 11 tests; 401 re-auth+retry; crash WS union mirrors ws/crash.py. CARRY-FWD→S5/S8: HttpGameClient does NOT check res.ok before res.json() and fairness() always returns {available:true} — typed bet-error/RG-block envelope won't surface; close this when wiring bet errors / RG reasons |
+| S5  | App shell, lobby, auth/balance, badges | pending | 0 | — | — | balance from /auth/me; needs S4 ✓ — ELIGIBLE NOW; honor S4 carry-fwd (surface error envelope) |
 | S6  | PixiStage harness + reduced-motion | passed | 1 | merged → main | f525aa0 (merge 5e40812) | jsdom WebGL-probe seam; useReducedMotion. CARRY-FWD→S25: add vi.mock('pixi.js') lifecycle test (onReady/destroy-once/unmount-before-init race) — jsdom can't exercise teardown |
 | S7  | FairnessDrawer + verifier link | pending | 0 | — | — | demo notice in mock mode |
 | S8  | Shared BetControls + ResultPanel | pending | 0 | — | — | reused by all instant games |
