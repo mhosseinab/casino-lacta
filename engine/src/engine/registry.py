@@ -96,6 +96,12 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # reveals payout = (1-edge)·C(25,k)/C(25-M,k), so EV(cash) = 1-edge for any (M,k).
     # M is per-bet input (not config); default edge 0.01, no game params.
     "originals.mines": ("engine.games.mines", GameConfig(edge=0.01, params={})),
+    # HiLo (spec §A.7): the second StatefulGame, first to draw fresh entropy per action.
+    # Each next card draws floor(f*52)//4+1 (uniform rank 1..13); a correct Higher-/
+    # Lower-or-same call compounds (1-edge)/p(side); each step EV = 1-edge. No game
+    # params; default edge 0.01. The cumulative multiplier is unbounded in principle —
+    # the real ceiling is the GOLD GameLimit max_win (enforced via engine.money.cap).
+    "originals.hilo": ("engine.games.hilo", GameConfig(edge=0.01, params={})),
 }
 
 
