@@ -149,6 +149,10 @@ class GameRound(Base):
     status: Mapped[str] = mapped_column(String(16))
     input: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     outcome: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # SERVER-ONLY opaque StatefulGame state (e.g. the Mines mine layout). Held back
+    # from every client-facing projection (/state + action responses never serialize
+    # it) so a hidden layout cannot leak mid-round. NULL for instant (SINGLE) rounds.
+    server_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     config_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
