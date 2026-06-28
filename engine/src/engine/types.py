@@ -66,7 +66,7 @@ class InstantGame(Protocol):
 
 
 class StatefulGame(Protocol):
-    """Multi-step games with server-held state (Mines, HiLo, Crash-bet, Blackjack, Baccarat).
+    """Multi-step games with server-held state (Mines, HiLo, Crash-bet, Blackjack, Video Poker).
 
     The state returned by :meth:`init` and advanced by :meth:`step` is OPAQUE to the
     app: the bet loop persists it and feeds it back, never inspecting its game-specific
