@@ -29,12 +29,14 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum
+from itertools import combinations
 
 # Rank constants for readers; the integer values double as comparison keys.
 _ACE = 14
 _LOW_ACE_WHEEL = (_ACE, 5, 4, 3, 2)  # the only straight where the ace plays low
 _WHEEL_HIGH = 5  # a wheel ranks as a 5-high straight
 _HAND_SIZE = 5
+_SEVEN_CARD_SIZE = 7  # 2 hole + 5 community (Texas hold'em showdown)
 
 
 class HandCategory(IntEnum):
@@ -143,3 +145,25 @@ def rank_five(cards: Sequence[Card]) -> HandRank:
     if shape == (2, 1, 1, 1):
         return HandRank(HandCategory.ONE_PAIR, group_ranks)
     return HandRank(HandCategory.HIGH_CARD, tuple(ranks_desc))
+
+
+def rank_seven(cards: Sequence[Card]) -> HandRank:
+    """Rank the best 5-card hand out of 7 into a totally ordered :class:`HandRank`.
+
+    The S29 CARRY-FORWARD: best-5-of-7 is simply the maximum ``rank_five`` over the
+    C(7, 5) = 21 five-card subsets — it REUSES the single ranking core (``rank_five``)
+    verbatim and never re-implements hand-category logic. Because :class:`HandRank` is a
+    total order, ``max`` directly yields the strongest hand; the ace's dual role, the
+    wheel, and the royal flush are all handled by ``rank_five`` for free.
+
+    The returned rank is the showdown contract S30+ consume: poker compares players'
+    ``rank_seven`` results for the win (``>``) and for split pots (``==``); the specific
+    five winning cards are presentation, deliberately not part of this minimal API.
+
+    Raises ``ValueError`` unless given exactly 7 distinct cards.
+    """
+    if len(cards) != _SEVEN_CARD_SIZE:
+        raise ValueError(f"rank_seven needs exactly 7 cards, got {len(cards)}")
+    if len(set(cards)) != _SEVEN_CARD_SIZE:
+        raise ValueError("rank_seven needs 7 distinct cards (duplicates given)")
+    return max(rank_five(combo) for combo in combinations(cards, _HAND_SIZE))
