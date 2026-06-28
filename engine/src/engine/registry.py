@@ -15,6 +15,7 @@ import importlib
 from typing import cast
 
 from engine.games.keno import default_params as _keno_default_params
+from engine.table.blackjack import DEFAULT_PARAMS as _blackjack_default_params
 from engine.types import GameConfig, InstantGame, StatefulGame
 
 # Plinko (spec §A.5) per-(rows, risk) multiplier tables — TUNED so the analytic
@@ -102,6 +103,16 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # params; default edge 0.01. The cumulative multiplier is unbounded in principle —
     # the real ceiling is the GOLD GameLimit max_win (enforced via engine.money.cap).
     "originals.hilo": ("engine.games.hilo", GameConfig(edge=0.01, params={})),
+    # Blackjack (table): the first StatefulGame table game. D-deck shoe committed at
+    # round open, drawn without replacement progressively from the stream; hit/stand/
+    # double/split/insurance/(surrender), dealer plays per S17. Payouts are rule-FIXED
+    # (3:2 BJ, even-money win, push) — edge is EMERGENT (the published ~0.40% house
+    # edge for the default rule set), documentation only, never applied to a payout.
+    # All rules live in params (config, not literals); see engine.table.blackjack.
+    "table.blackjack": (
+        "engine.table.blackjack",
+        GameConfig(edge=0.004, params=_blackjack_default_params),
+    ),
 }
 
 
