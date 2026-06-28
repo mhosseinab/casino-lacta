@@ -255,3 +255,24 @@ class Jackpot(Base):
     game_id: Mapped[str] = mapped_column(String(64), index=True)
     pool_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     pop_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class LeaderboardSnapshot(Base):
+    """A durable, point-in-time capture of one leaderboard (S37).
+
+    Redis sorted sets are the live boards; :func:`app.economy.leaderboards.snapshot`
+    persists the top-N of each to this table so a Redis flush does not lose history. Rows
+    captured together share one ``snapshot_id`` (one row per board). ``entries`` is the
+    ranked top-N as ``[{userId, score, rank}]`` where ``score`` is integer minor units —
+    no float is ever persisted."""
+
+    __tablename__ = "leaderboard_snapshots"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(64), index=True)
+    board: Mapped[str] = mapped_column(String(32))
+    currency: Mapped[str] = mapped_column(String(16))
+    entries: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
