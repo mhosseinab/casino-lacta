@@ -15,6 +15,7 @@ import importlib
 from typing import cast
 
 from engine.games.keno import default_params as _keno_default_params
+from engine.table.blackjack import DEFAULT_PARAMS as _blackjack_default_params
 from engine.table.roulette_wheel import default_params as _roulette_wheel_default_params
 from engine.table.video_poker import default_params as _video_poker_default_params
 from engine.types import GameConfig, InstantGame, StatefulGame
@@ -136,6 +137,16 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     "table.video_poker": (
         "engine.table.video_poker",
         GameConfig(edge=0.0046, params=_video_poker_default_params()),
+    ),
+    # Blackjack (table): the first StatefulGame table game. D-deck shoe committed at
+    # round open, drawn without replacement progressively from the stream; hit/stand/
+    # double/split/insurance/(surrender), dealer plays per S17. Payouts are rule-FIXED
+    # (3:2 BJ, even-money win, push) — edge is EMERGENT (the published ~0.40% house
+    # edge for the default rule set), documentation only, never applied to a payout.
+    # All rules live in params (config, not literals); see engine.table.blackjack.
+    "table.blackjack": (
+        "engine.table.blackjack",
+        GameConfig(edge=0.004, params=_blackjack_default_params),
     ),
 }
 
