@@ -112,6 +112,20 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
         "engine.table.roulette_wheel",
         GameConfig(edge=1.0 / 37.0, params=_roulette_wheel_default_params()),
     ),
+    # Baccarat (punto banco, spec §B.4): an InstantGame (no player decisions) — deal
+    # Player/Banker from a finite shoe, apply the fixed third-card tableau, settle
+    # PLAYER/BANKER/TIE. Banker win pays 1:1 minus `bankerCommission`; TIE pays
+    # `tiePayout`:1; PLAYER/BANKER push on a tie. The edges are EMERGENT from the
+    # rules (not a tunable `edge`): for the defaults below, Banker ≈ 1.06% / Player
+    # ≈ 1.24% / Tie ≈ 14.36% (certified by exact enumeration). `edge` here is the
+    # headline (Banker) house edge, informational only — play() never reads it.
+    "table.baccarat": (
+        "engine.table.baccarat",
+        GameConfig(
+            edge=0.0106,
+            params={"decks": 8, "bankerCommission": 0.05, "tiePayout": 8},
+        ),
+    ),
 }
 
 
