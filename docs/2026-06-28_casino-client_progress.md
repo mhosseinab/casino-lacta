@@ -4,10 +4,17 @@
 Source script: `2026-06-28_casino-client_implementation-steps.md` (S1..S29).
 Plan: `2026-06-28_casino-client_plan.md`. Integration branch: `casino-client/main` (off
 `casino-games/main`).
+**Worktrees (MANDATORY):** `casino-client/main` is checked out at `.worktrees/cc-main` (or sibling
+`../.casino-wt/cc-main`); every step runs in its own worktree `.worktrees/cc-S<N>` — never the shared
+top-level checkout, which holds in-flight backend work.
 Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/deploy/secrets (S26–S28)
 → `/security-review` (or `ledger-security-reviewer` fallback) in addition to config sanity.
 
 ## Rules in force
+- **Dedicated worktree per step** off `casino-client/main`; never edit/commit in the shared top-level
+  tree (it carries `casino-games/*` WIP — committing there once captured backend WIP into a client
+  commit and had to be rebuilt). Sandbox/mount: if `unlink` is blocked, rename stale `.git/**/*.lock`
+  (and `MERGE_HEAD`) aside before each git op.
 - Respect the dependency graph: start a step only when its prerequisites are `passed`; run independent
   steps (disjoint files, no edge) in parallel; never let two steps edit the same file concurrently —
   including `client/src/games/registry.tsx`, which every game step (S9, S11–S24) appends one line to
@@ -29,9 +36,9 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 
 ## Status table
 
-| Step | Title | Status | Attempts | Branch | Commit SHA | Note |
-|------|-------|--------|----------|--------|-----------|------|
-| S1  | Scaffold Vite+React+TS client | pending | 0 | — | — | foundation |
+| Step | Title | Status | Attempts | Branch / worktree | Commit SHA | Note |
+|------|-------|--------|----------|-------------------|-----------|------|
+| S1  | Scaffold Vite+React+TS client | passed | 1 | casino-client/main · wt cc-main | 2bce179 | tsc clean · vitest 2/2 · vite build→dist (142kB/46kB gz) · biome clean (run off-mount; mount blocks installer unlink) |
 | S2  | Generate contracts-ts from API OpenAPI | pending | 0 | — | — | seam; `task contracts` |
 | S3  | Money + minor-units utils | pending | 0 | — | — | parallel w/ S2,S6 |
 | S4  | Transport seam: GameClient + Http + Mock | pending | 0 | — | — | quarantine RNG to mock/ |
@@ -90,8 +97,16 @@ P7 Polish & ship
 
 ## Log
 > Append-only. One line per state change: what passed/blocked, merge SHA, what's next.
-- 2026-06-28: Docs authored (plan/steps/orchestrator/progress). Progress seeded S1..S29 = pending.
-  Next: SETUP (create `casino-client/main` off `casino-games/main`), then S1.
-- 2026-06-28: S1 (scaffold) executed directly in this session as the kickoff step — see the session
-  notes / commit for the actual Verify output. Update this row's status/SHA when it lands on
-  `casino-client/main`.
+- 2026-06-28: Docs authored (plan/steps/orchestrator/progress). Committed on `casino-client/main`
+  (ea79a9a). Progress seeded S1..S29 = pending.
+- 2026-06-28: SETUP — created integration branch `casino-client/main` off `casino-games/main`;
+  created the dedicated worktree `.worktrees/cc-main` (the shared top-level tree carries backend WIP
+  and must not be used for client work).
+- 2026-06-28: **S1 PASSED** (1 cycle). Clean scaffold committed `2bce179` on `casino-client/main` in
+  the worktree (no backend WIP). Verify run off-mount on identical files (the sandbox mount blocks the
+  installer's `unlink`): `tsc --noEmit` clean; `vitest run` 2/2; `vite build` → `dist` (142 kB / 46 kB
+  gz); `biome check` clean. Next eligible: S2, S3, S6 (parallel) — each in its own worktree.
+- NOTE (sandbox): the mount disallows `unlink`, so `.git` accumulated stale `*.lock` and a leftover
+  `casino-client/S1` ref pointing at an abandoned polluted commit. Harmless to the branch tips; clean
+  on a normal host with `git worktree prune`, `git branch -D casino-client/S1`, and
+  `find .git -name '*.lock*' -delete`.
