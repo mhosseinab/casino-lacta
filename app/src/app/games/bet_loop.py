@@ -544,8 +544,9 @@ async def _open_stateful_round(
     """Open a server-held round: single debit at start, commit the hidden layout from
     the seeded stream, persist ``status=ACTIVE``. NO credit here — settlement is
     ``step_action`` (cashout). The full opaque state goes to the server-only
-    ``server_state`` column; the client-facing ``outcome`` carries only a generic
-    ``{status, k}`` projection (no layout)."""
+    ``server_state`` column; the client-facing ``outcome`` is the GAME's own
+    ``public_view`` snapshot (HiLo surfaces its opening shown card; Mines surfaces no
+    unrevealed cell)."""
     key_debit = _idempotency_key(bet_id, "WAGER")
     key_credit = _idempotency_key(bet_id, "WIN")
 
@@ -555,12 +556,15 @@ async def _open_stateful_round(
     )
 
     now = datetime.now(UTC)
-    open_projection: dict[str, Any] = {"status": "ACTIVE", "k": 0}
+    open_projection: dict[str, Any] = {}
     try:
         async with session_factory() as session, session.begin():
             fair = await _reserve_fairness(session, user_id)
             rng = create_rng(fair.server_seed, fair.client_seed, fair.nonce)
             game_state = game.init(bet_input, rng, engine_cfg)  # opaque; not inspected here
+            # The client-facing OPEN snapshot is the GAME's own redaction — the saga
+            # serializes its return and never indexes a key inside the opaque state.
+            open_projection = game.public_view(game_state)
             # The SAGA-level fairness envelope: ``cursor`` is how far the seeded stream
             # has advanced (init's committed draws); ``game`` is the OPAQUE per-game
             # state. The app reads only ``cursor``/``game`` — never a key inside ``game``
@@ -711,6 +715,14 @@ async def _resume_rng(
     )
 
 
+def stateful_round_view(game: StatefulGame, server_state: dict[str, Any] | None) -> dict[str, Any]:
+    """The client-safe snapshot of a stateful round (for ``/state`` resume), via the
+    GAME's own ``public_view``. Unwraps the ``{cursor, game}`` envelope and hands the
+    opaque game state to the game — the saga never indexes a key inside ``game``."""
+    envelope = dict(server_state or {})
+    return game.public_view(dict(envelope.get("game") or {}))
+
+
 async def step_action(
     session_factory: async_sessionmaker[AsyncSession],
     ledger: Ledger,
@@ -777,13 +789,19 @@ async def step_action(
             )  # may raise InvalidBetInput
             if outcome is None:  # pragma: no cover - Mines/HiLo yield a projection per action
                 raise RoundTerminal(f"round {round_id} produced no outcome")
+            # Two intentionally distinct client projections: ``Outcome.detail`` is the
+            # per-TRANSITION event (what JUST happened — revealedRank/won/stepMultiplier,
+            # cell/safe), returned by /action; ``public_view`` is the round STATE SNAPSHOT
+            # (where the round IS now), returned by /bet-open and /state. They overlap on
+            # status but answer different questions, so they are not unified — both remain
+            # the GAME's own redaction (no app-side key reads), so neither can leak.
             detail = dict(outcome.detail)
             new_status = str(detail["status"])
 
             # Persist the advanced envelope: the new opaque game state + the cursor the
             # stream reached (HiLo: +1 per guess; Mines: unchanged).
             round_row.server_state = {"cursor": rng.cursor, "game": next_game}
-            round_row.outcome = detail  # client-facing projection (no leak when ACTIVE)
+            round_row.outcome = detail  # client-facing transition projection (no leak when ACTIVE)
             response = dict(detail)
             response["roundId"] = round_id
 

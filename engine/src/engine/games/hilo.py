@@ -185,6 +185,20 @@ class HiLo:
             },
         )
 
+    def public_view(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The client-safe round snapshot (for ``/bet`` open + ``/state`` resume).
+
+        HiLo holds NO secret state — the shown card, cumulative multiplier and status are
+        all already known to the player — so the safe projection IS the whole public
+        state. ``shownRank`` is the card the next guess is made against (this is what makes
+        the opening playable). Nothing is withheld at any status."""
+        return {
+            "status": str(state["status"]),
+            "shownRank": int(state["shown_rank"]),
+            "currentMultiplier": float(state["cumulative"]),
+            "steps": int(state["steps"]),
+        }
+
     def _cashout(self, state: dict[str, Any]) -> tuple[dict[str, Any], Outcome]:
         steps = int(state["steps"])
         if steps < 1:

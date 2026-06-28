@@ -256,3 +256,32 @@ def test_unknown_op_and_bad_side_rejected() -> None:
 
 def test_validate_input_accepts_empty() -> None:
     assert _game().validate_input({}, _cfg()) is None
+
+
+# --- public_view (the client-safe snapshot for /bet open + /state) -----------
+
+
+def test_public_view_surfaces_shown_card() -> None:
+    """HiLo holds no secret: the snapshot surfaces the shown card (so the opening is
+    playable) and the cumulative multiplier."""
+    rng = create_rng(SERVER_SEED, CLIENT_SEED, 7)
+    state = _game().init({}, rng, _cfg())
+    view = _game().public_view(state)
+    assert view["status"] == "ACTIVE"
+    assert view["shownRank"] == state["shown_rank"]
+    assert view["currentMultiplier"] == state["cumulative"]
+    assert view["steps"] == 0
+
+
+def test_public_view_tracks_shown_card_after_a_guess() -> None:
+    """After a winning guess the snapshot's shown card is the revealed card."""
+    rng = _FakeRng([_f_for_card(0), _f_for_card(48)])  # shown rank 1, reveal rank 13
+    state = _game().init({}, cast("RngStream", rng), _cfg())
+    state, outcome = _game().step(state, {"op": "guess", "side": "HIGHER"}, cast("RngStream", rng))
+    assert outcome is not None
+    view = _game().public_view(state)
+    assert view["shownRank"] == 13 == outcome.detail["revealedRank"]
+    assert view["steps"] == 1
+    assert view["currentMultiplier"] == pytest.approx(
+        outcome.detail["currentMultiplier"], rel=1e-12
+    )

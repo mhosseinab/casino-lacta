@@ -37,11 +37,12 @@ from app.db.models import (
     User,
     Wallet,
 )
-from app.games import ActiveRoundExists, place_bet
+from app.games import ActiveRoundExists, place_bet, stateful_round_view
 from app.games.bet_loop import step_action
 from app.wallet import Ledger
 from engine.games.hilo import draw_rank, step_multiplier
 from engine.money import apply_multiplier, cap
+from engine.registry import load_game
 from engine.rng import HmacRngStream
 
 GAME_ID = "originals.hilo"
@@ -261,3 +262,44 @@ async def test_open_resend_returns_active_no_second_debit(
     assert second.bet_id == first.bet_id
     assert second.status == "ACTIVE"
     assert await _ledger_type_count(session_factory, wid, "WAGER") == 1
+
+
+# --- public_view surfacing (the gap S14 closes) ------------------------------
+
+
+async def test_bet_open_and_state_surface_the_shown_card(
+    ledger: Ledger, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """/bet open AND /state both surface HiLo's shown card (without it the first guess
+    would be blind). /state tracks the CURRENT card across a guess."""
+    uid, _ = await _seed_player(session_factory, ledger)
+    rid = f"r-{uuid4().hex}"
+    opened = await place_bet(
+        session_factory, ledger, user_id=uid, game_id=GAME_ID, bet_id=rid, stake_minor=1_000
+    )
+    # /bet open response surfaces the opening card.
+    assert "shownRank" in opened.outcome
+    assert opened.outcome["status"] == "ACTIVE"
+    assert 1 <= opened.outcome["shownRank"] <= 13
+
+    game = load_game(GAME_ID)
+
+    async def state_view() -> dict:
+        async with session_factory() as session:
+            rr = await session.get(GameRound, rid)
+        assert rr is not None
+        return stateful_round_view(game, rr.server_state)  # type: ignore[arg-type]
+
+    # /state surfaces the same opening card.
+    assert (await state_view())["shownRank"] == opened.outcome["shownRank"]
+
+    # After a winning guess, /state shows the NEW shown card (the revealed one).
+    shown, nxt = await _peek_next(session_factory, rid, uid)
+    side = _winning_side(shown, nxt)
+    resp = await step_action(
+        session_factory, ledger, user_id=uid, game_id=GAME_ID,
+        round_id=rid, action={"op": "guess", "side": side},
+    )
+    view = await state_view()
+    assert view["shownRank"] == nxt == resp["revealedRank"]
+    assert view["steps"] == 1

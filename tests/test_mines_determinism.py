@@ -186,3 +186,49 @@ def test_validate_input_accepts_valid(ok: dict[str, Any]) -> None:
 def test_validate_input_rejects_invalid(bad: dict[str, Any]) -> None:
     with pytest.raises(InvalidBetInput):
         _game().validate_input(bad, _cfg())
+
+
+# --- public_view (the client-safe snapshot for /bet open + /state) -----------
+
+
+def test_public_view_active_never_leaks_mine_positions() -> None:
+    """While ACTIVE the snapshot exposes {status, k, revealed} (+ multipliers) but NEVER
+    the layout — at open and after a safe reveal."""
+    state = _init({"mines": 5}, 2)
+    view = _game().public_view(state)
+    assert view["status"] == "ACTIVE"
+    assert view["k"] == 0
+    assert view["revealed"] == []
+    assert "minePositions" not in view
+    assert "mine_positions" not in view
+
+    safe = _safe_cells(state)
+    state, _ = _step(state, {"op": "reveal", "cell": safe[0]})
+    view = _game().public_view(state)
+    assert view["status"] == "ACTIVE"
+    assert view["k"] == 1
+    assert view["revealed"] == [safe[0]]
+    assert "minePositions" not in view
+    assert "mine_positions" not in view
+
+
+def test_public_view_terminal_discloses_layout() -> None:
+    """At a TERMINAL status the round is over, so the snapshot DISCLOSES minePositions
+    (provable fairness)."""
+    # LOST
+    state = _init({"mines": 5}, 2)
+    mine = state["mine_positions"][0]
+    state, _ = _step(state, {"op": "reveal", "cell": mine})
+    view = _game().public_view(state)
+    assert view["status"] == "LOST"
+    assert view["minePositions"] == sorted(state["mine_positions"])
+
+    # CASHED_OUT
+    state = _init({"mines": 3}, 5)
+    safe = _safe_cells(state)
+    state, _ = _step(state, {"op": "reveal", "cell": safe[0]})
+    state, _ = _step(state, {"op": "cashout"})
+    view = _game().public_view(state)
+    assert view["status"] == "CASHED_OUT"
+    assert view["minePositions"] == sorted(state["mine_positions"])
+    assert "multiplier" in view

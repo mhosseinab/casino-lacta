@@ -36,9 +36,10 @@ from app.db.models import (
     User,
     Wallet,
 )
-from app.games import ActiveRoundExists, place_bet
+from app.games import ActiveRoundExists, place_bet, stateful_round_view
 from app.games.bet_loop import RoundNotFound, RoundTerminal, step_action
 from app.wallet import Ledger
+from engine.registry import load_game
 from engine.types import InvalidBetInput
 
 GAME_ID = "originals.mines"
@@ -436,6 +437,49 @@ async def test_active_round_projection_leaks_no_mine_positions(
     # The layout lives in the OPAQUE game state inside the {cursor, game} envelope —
     # the server-only column — never in the client-facing outcome.
     assert row.server_state and "mine_positions" in (row.server_state.get("game") or {})
+
+
+async def test_state_view_redacts_while_active_and_discloses_at_terminal(
+    ledger: Ledger, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """The /state snapshot (public_view of the current state) NEVER carries mine
+    positions while ACTIVE, and discloses them only once the round is terminal."""
+    uid, _ = await _seed_player(session_factory, ledger)
+    rid = f"r-{uuid4().hex}"
+    opened = await place_bet(
+        session_factory, ledger, user_id=uid, game_id=GAME_ID, bet_id=rid,
+        stake_minor=1_000, input={"mines": 5},
+    )
+    # /bet open snapshot: no layout.
+    assert "minePositions" not in opened.outcome
+
+    game = load_game(GAME_ID)
+
+    async def state_view() -> dict:
+        async with session_factory() as session:
+            rr = await session.get(GameRound, rid)
+        assert rr is not None
+        return stateful_round_view(game, rr.server_state)  # type: ignore[arg-type]
+
+    # ACTIVE after a safe reveal: still no layout.
+    safe = await _safe_cells(session_factory, rid)
+    await step_action(
+        session_factory, ledger, user_id=uid, game_id=GAME_ID,
+        round_id=rid, action={"op": "reveal", "cell": safe[0]},
+    )
+    active = await state_view()
+    assert active["status"] == "ACTIVE"
+    assert "minePositions" not in active
+    assert active["k"] == 1
+
+    # Terminal (cashout): now the layout is disclosed.
+    await step_action(
+        session_factory, ledger, user_id=uid, game_id=GAME_ID,
+        round_id=rid, action={"op": "cashout"},
+    )
+    terminal = await state_view()
+    assert terminal["status"] == "CASHED_OUT"
+    assert "minePositions" in terminal
 
 
 async def test_action_rejected_for_other_users_round(

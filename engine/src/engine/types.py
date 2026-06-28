@@ -94,6 +94,23 @@ class StatefulGame(Protocol):
         """Commit the hidden layout from the rng stream at round start; return opaque state."""
         ...
 
+    def public_view(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The CLIENT-SAFE projection of the opaque game state — the game's own redaction,
+        in ONE auditable place.
+
+        A pure function (stdlib + engine only, no IO/clock/random) the APP calls to render
+        a round snapshot at ``/bet`` open and ``/state`` resume: the game decides what is
+        public so the app never indexes a key inside the opaque state (the redaction seam
+        lives here, not in the app). While the round is ACTIVE it MUST withhold any hidden
+        information (Mines' unrevealed cells); at a TERMINAL status it MAY disclose it
+        (provable fairness). Each stateful game implements this explicitly (OCP) — no
+        protocol-level default, so a new game cannot silently inherit a leaky view.
+
+        Purely app-facing: the verifier / determinism path NEVER calls it (it reproduces
+        outcomes via ``init``/``step``), so reproduction stays independent of presentation.
+        """
+        ...
+
     def step(
         self, state: dict[str, Any], action: dict[str, Any], rng: RngStream
     ) -> tuple[dict[str, Any], Outcome | None]:

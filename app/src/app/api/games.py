@@ -16,7 +16,7 @@ cannot bet as, or read the state of, another user.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,11 +36,12 @@ from app.games import (
     RoundTerminal,
     StakeOutOfRange,
     place_bet,
+    stateful_round_view,
     step_action,
 )
 from app.wallet import InsufficientFunds, Ledger, WalletNotFound
-from engine.registry import UnknownGame
-from engine.types import InvalidBetInput
+from engine.registry import UnknownGame, load_game
+from engine.types import InvalidBetInput, StatefulGame
 
 router = APIRouter(prefix="/games", tags=["games"])
 
@@ -186,9 +187,16 @@ async def get_state(
         )
     if round_row is None:
         raise HTTPException(status_code=404, detail="no round for this user/game")
-    # REDACTION: only the client-facing safe projection is serialized. The server-only
-    # `server_state` column (the Mines mine layout) is deliberately NEVER returned, so
-    # a mid-round caller cannot infer an unrevealed mine.
+    # REDACTION: a stateful round's snapshot is the GAME's own ``public_view`` of the
+    # current opaque state (HiLo surfaces its shown card; Mines never an unrevealed cell
+    # while ACTIVE). The server-only ``server_state`` envelope is never serialized raw,
+    # so a mid-round caller cannot infer hidden info. Instant rounds have no server_state
+    # — their settled ``outcome`` is already public.
+    if round_row.server_state is not None:
+        game = cast("StatefulGame", load_game(game_id))
+        outcome: dict[str, Any] = stateful_round_view(game, round_row.server_state)
+    else:
+        outcome = dict(round_row.outcome or {})
     return {
         "roundId": round_row.id,
         "gameId": round_row.game_id,
@@ -196,5 +204,5 @@ async def get_state(
         "nonce": round_row.nonce,
         "configVersion": round_row.config_version,
         "input": round_row.input,
-        "outcome": round_row.outcome,
+        "outcome": outcome,
     }
