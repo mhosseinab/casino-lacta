@@ -39,8 +39,10 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.ws.crash_bets import (
     CrashBetResult,
     manual_cashout,
+    next_crash_round_number,
     open_crash_round,
     place_crash_bet,
+    recover_crash,
     settle_crash_round,
 )
 from app.ws.crash_core import CrashRound, RoundStatus
@@ -377,13 +379,31 @@ class CrashActor:
             stamped_multiplier=self._current_multiplier,
         )
 
+    @property
+    def current_cosmetic_multiplier(self) -> float:
+        """The actor's last-published cosmetic tick — the public value REST /state
+        surfaces as the live multiplier (it is never an input to ``C``)."""
+        return self._current_multiplier
+
+    async def recover(self) -> int:
+        """Boot recovery (the restart entrypoint): re-settle every orphaned round
+        deterministically (the committed seed already fixed ``C``) and return the
+        next round number recovered from the DB — so the actor NEVER regenerates an
+        existing ``round-{n}`` id (the stale-seed collision hazard). A no-op for the
+        S18 presentation-only actor (no DB) → starts at round 1."""
+        if not self._persists:
+            return 1
+        await recover_crash(self._session_factory, self._ledger)  # type: ignore[arg-type]
+        return await next_crash_round_number(self._session_factory)  # type: ignore[arg-type]
+
     async def run_forever(self) -> None:
         """Run rounds back-to-back forever (the singleton partition entrypoint).
 
         Not started on import: a dedicated process calls this so importing the app
-        (and its WS router) never spins a crash loop.
+        (and its WS router) never spins a crash loop. On entry it RECOVERS — orphaned
+        rounds re-settle and the round counter continues from the DB (no id reuse).
         """
-        round_number = 0
+        round_number = (await self.recover()) - 1
         while True:
             round_number += 1
             await self.run_round(round_number)
