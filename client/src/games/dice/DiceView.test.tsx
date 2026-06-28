@@ -219,6 +219,28 @@ describe('DiceView — thin renderer of a server-decided dice bet', () => {
     expect(screen.queryByTestId('dice-roll')).not.toBeInTheDocument();
   });
 
+  it('surfaces a NEUTRAL message on a non-rejection transport fault and renders no result', async () => {
+    // A 500 / network / parse failure arrives as a plain Error (NOT
+    // BetRejectedError). It must not become an unhandled rejection: the view
+    // shows a generic notice (distinct from a server rejectionReason) and places
+    // no result. This propagates to all 15 later game views.
+    const client = new FakeGameClient({
+      betError: new Error('Internal Server Error'),
+    });
+    renderDice(client);
+
+    await userEvent.click(screen.getByRole('button', { name: /^bet$/i }));
+
+    expect(
+      await screen.findByText(/something went wrong/i),
+    ).toBeInTheDocument();
+    // The raw error text is NOT leaked as if it were a server rejection reason.
+    expect(
+      screen.queryByText(/internal server error/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dice-roll')).not.toBeInTheDocument();
+  });
+
   it('(reduced motion) renders the static server roll immediately, no animation', async () => {
     // prefers-reduced-motion: reduce — useReducedMotion reads matchMedia.
     vi.stubGlobal(

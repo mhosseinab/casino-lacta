@@ -28,13 +28,18 @@ export default function DiceView() {
   const [direction, setDirection] = useState<Direction>('UNDER');
   const [bet, setBet] = useState<BetObject | null>(null);
   const [rejection, setRejection] = useState<string | null>(null);
+  // A NEUTRAL transport-fault notice, distinct from a server `rejectionReason`.
+  // Set for any non-BetRejectedError (HTTP 5xx, network drop, JSON parse) so a
+  // fault doesn't become a silent unhandled rejection. Reference pattern S11–S24.
+  const [transportError, setTransportError] = useState<string | null>(null);
 
   async function placeBet(stakeMinor: number): Promise<void> {
     setRejection(null);
+    setTransportError(null);
     try {
       // betId is a client-generated IDEMPOTENCY key, NOT outcome entropy — the
-      // server derives the roll from its own seeds (crypto.randomUUID, never
-      // Math.random/getRandomValues).
+      // server derives the roll from its own seeds. The client never generates
+      // game randomness (no client-side RNG); crypto.randomUUID is a key only.
       const result = await client.bet(GAME_ID, {
         betId: crypto.randomUUID(),
         stakeMinor,
@@ -46,12 +51,15 @@ export default function DiceView() {
       // Server-authoritative: re-read the balance, never adjust it locally.
       await refreshBalance();
     } catch (err) {
+      // A server rule refusal (min/max-bet, RG limit) — surface the reason verbatim.
       if (err instanceof BetRejectedError) {
         setBet(null);
         setRejection(err.reason);
         return;
       }
-      throw err;
+      // Any other failure (transport/server/parse): show a neutral message and
+      // never leak the raw error. If bet() itself failed no result was set.
+      setTransportError('Something went wrong. Please try again.');
     }
   }
 
@@ -125,6 +133,16 @@ export default function DiceView() {
             balanceMinor={balanceMinor}
             rejectionReason={rejection}
           />
+
+          {transportError !== null && (
+            <p
+              role="alert"
+              data-testid="dice-error"
+              style={{ margin: 0, color: '#c0392b', fontSize: 13 }}
+            >
+              {transportError}
+            </p>
+          )}
         </div>
 
         {bet && (
