@@ -46,8 +46,8 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S6  | PixiStage harness + reduced-motion | passed | 1 | merged → main | f525aa0 (merge 5e40812) | jsdom WebGL-probe seam; useReducedMotion. CARRY-FWD→S25: add vi.mock('pixi.js') lifecycle test (onReady/destroy-once/unmount-before-init race) — jsdom can't exercise teardown |
 | S7  | FairnessDrawer + verifier link | passed | 1 | cherry-picked → main | 1a14807 → cp 3732c25 | renders real disclosure; verifier URL is server-stamped (verifierUrl) rendered verbatim; demo/unavailable notice; 5 tests |
 | S8  | Shared BetControls + ResultPanel | passed | 1 | merged → main | 69f353c (merge 4b7f2ac) | BetControls(parseStakeToMinor, integer quick-stakes, rejectionReason prop) + ResultPanel(server-verbatim, FairnessDrawer wired); 10 tests. CARRY-FWD: ResultPanel assumes Dice-shaped outcome{multiplier,payoutMinor} — generalize for slots/table later |
-| S9  | Dice view (vertical slice) | pending | 0 | — | — | the reference pattern; ELIGIBLE (S6,S7,S8 ✓). MUST also fix S4 res.ok carry-fwd: HttpGameClient.bet should surface the server bet-error/RG envelope so BetControls.rejectionReason gets it |
-| S10 | REVIEW GATE (human go) | pending | 0 | — | — | STOP before S11+ |
+| S9  | Dice view (vertical slice) | passed | 3 | merged → main | 404d986+fix 21e3e04 (merge 57187c8) | reference pattern; closed S4 res.ok via typed BetRejectedError. CARRY-FWD: (a) PixiStage redraw seam = game stage captures app+ready flag, redraws in useEffect keyed on outcome, returns draw cleanup (S11–S24 contract, documented in DiceStage); (b) redraw keys on outcome VALUE — Plinko(S17)/Crash(S18)/slots must key on bet identity (betId/nonce) for repeated identical outcomes; (c) extract pure landing math + unit-test it per game; (d) generic transport-error UI state |
+| S10 | REVIEW GATE (human go) | **AWAITING HUMAN GO** | 0 | — | — | STOP. S1–S9 done, 70 tests green. Present seam/quarantine/BetControls/PixiStage/Fairness/Dice for sign-off. OPEN SCOPE DECISION for human: FairnessDrawer is post-bet only (no pre-bet serverSeedHash commit shown) — accept for v1 or add pre-bet commit? |
 | S11 | Limbo view | pending | 0 | — | — | touches registry.tsx |
 | S12 | Pocket Dice view | pending | 0 | — | — | touches registry.tsx |
 | S13 | Keno view | pending | 0 | — | — | touches registry.tsx |
@@ -163,3 +163,14 @@ P7 Polish & ship
   (user pushed my S7+progress). Pull before S8 was a no-op (up to date).
 - 2026-06-28: **S8 PASSED** (reviewer PASS). Merged 4b7f2ac. S1–S8 (all pre-gate foundation) complete.
   Next: **S9 Dice slice** → **S10 HUMAN REVIEW GATE** (STOP for explicit go before S11–S24).
+- 2026-06-28: **S9 PASSED** (3 cycles; reviewer caught a real template defect — PixiStage drew the
+  cosmetic marker only on the FIRST bet, stale on replay; fixed with a redraw seam + pure landing-math
+  unit test + generic transport-error UI; also closed the S4 res.ok gap with a typed BetRejectedError).
+  Merged 57187c8. Gate verify @ 57187c8: pnpm install OK, tsc clean, vitest **70/70 (16 files)**,
+  build OK, thin-renderer grep clean (only a test comment), RNG quarantine = mock/ only.
+- 2026-06-28: **⛔ AT S10 HUMAN REVIEW GATE — STOPPED.** Awaiting explicit human "go" before any of
+  S11–S24. Presented: GameClient seam (S4), RNG quarantine to lib/transport/mock/, BetControls/
+  ResultPanel (S8), PixiStage + reduced-motion (S6), FairnessDrawer (S7), Dice slice (S9), the
+  thin-renderer grep, and the redraw/test pattern. Open scope decision surfaced: fairness shown
+  post-bet only. Do NOT dispatch S11+ until the human approves; fold any requested pattern changes
+  back into S4–S9 first.
