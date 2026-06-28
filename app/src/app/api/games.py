@@ -116,14 +116,17 @@ async def post_bet(
 
 
 class ActionRequest(BaseModel):
-    """The /action intent for a stateful round (reveal / cashout). Identity comes from
-    the token, NEVER the body; the server decides the outcome from its held state."""
+    """The /action intent for a stateful round (Mines reveal/cashout, HiLo guess/cashout).
+    Identity comes from the token, NEVER the body; the server decides the outcome from its
+    held state. Per-game fields (``cell`` for Mines, ``side`` for HiLo) are optional —
+    each game validates the ones it needs in its pure ``step`` (the router stays generic)."""
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
     round_id: str
     op: str
     cell: int | None = None
+    side: str | None = None
 
 
 @router.post("/{game_id}/action")
@@ -133,12 +136,15 @@ async def post_action(
     request: Request,
     current: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Advance a stateful round (Mines reveal/cashout). Returns the safe client-facing
-    projection only — never the hidden layout. Identity is server-authoritative."""
+    """Advance a stateful round (Mines reveal/cashout, HiLo guess/cashout). Returns the
+    safe client-facing projection only — never hidden state. Identity is
+    server-authoritative."""
     rt = _runtime(request)
     action: dict[str, Any] = {"op": body.op}
     if body.cell is not None:
         action["cell"] = body.cell
+    if body.side is not None:
+        action["side"] = body.side
     try:
         return await step_action(
             rt.session_factory,
