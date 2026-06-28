@@ -32,23 +32,29 @@ The four integrity rules (where the bugs and the review concentrate):
    from its persisted ``BET_PLACED`` audit row, so the crash sweep is a pure,
    idempotent replay (the property S20's reconciler builds on).
 
-Persistence (S19 scope = money correctness only; S20 owns recovery/latency): the
-round is persisted at START into the existing ``GameRound`` row (a MULTIPLAYER
-discriminator) — its server-only ``server_state`` JSONB holds the per-round tuple
-``{roundSeed, roundNumber, C}`` (never serialized to a client), so re-settle can
-re-run ``CrashRound.open`` from the seed. No ``GET /state``, reconciler, or resume
-is built here.
+Persistence: the round is persisted at START into the existing ``GameRound`` row (a
+MULTIPLAYER discriminator) — its server-only ``server_state`` JSONB holds the
+per-round tuple ``{roundSeed, roundNumber, C}`` (never serialized to a client), so
+re-settle re-reads ``C`` from the seed.
+
+S20 — recovery/resume/latency built ON the same idempotent settlement path (never a
+second money path): :func:`crash_state` (the ``GET /state`` resume projection, with
+status-keyed redaction + an identity fence), :func:`next_crash_round_number` +
+:func:`recover_crash` (restart-safe: re-settle orphans, continue the counter from the
+DB so an id is never regenerated over a stale ``C``), and :func:`reconcile_crash_bets`
+(bets stuck non-terminal past a TTL). All re-settlement routes through the SAME
+:func:`settle_crash_round` replay — the reconciler/recovery never re-decide an outcome.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -63,10 +69,18 @@ from app.games.bet_loop import (
 from app.rg import can_bet
 from app.wallet import Ledger, WalletNotFound
 from app.ws.crash_core import CrashRound
+from engine.fairness import commit
 from engine.money import apply_multiplier, cap
 
 # The authoritative game id (the seeded GameConfig/GameLimit key, migration f6a7b8c9d0e1).
 CRASH_GAME_ID = "originals.crash"
+
+# Reconciler TTL — the config SEAM (a named knob + a per-call override, not a buried
+# literal): a still-ACTIVE bet whose round has been around longer than this is
+# considered stuck and is force-settled via the one settlement path. Boot recovery
+# passes ``ttl_seconds=0`` (re-settle every orphan; on boot nothing is in-progress);
+# the periodic reconciler uses this default so it never disturbs a live round.
+DEFAULT_RECONCILE_TTL_SECONDS = 300
 
 
 class CrashBetRejected(BetRejected):
@@ -415,14 +429,173 @@ async def settle_crash_round(
     return results
 
 
+# --------------------------------------------------------------------------- #
+# Resume — GET /state projection: the CURRENT shared round + the caller's bets.
+# --------------------------------------------------------------------------- #
+async def crash_state(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    user_id: str,
+    live_multiplier: float | None = None,
+) -> dict[str, Any]:
+    """The server-authoritative resume projection for a reconnecting client.
+
+    The round is the CURRENT shared round (latest by ``nonce`` — Crash is
+    MULTIPLAYER, not caller-scoped), returned even when the caller has no bets.
+    ``bets`` is the caller's still-ACTIVE bets in that round (an IDENTITY fence —
+    a caller never sees another player's positions).
+
+    REDACTION keys off the PERSISTED status (the recovery authority; the in-memory
+    actor may be absent): while the round is live (DB ``ACTIVE`` — covers
+    WAITING/RUNNING/CRASHED-pre-settle) the projection WITHHOLDS ``C`` and the raw
+    seed, exposing only the commitment hash + the cosmetic multiplier (what the
+    live tick/round events already show). Once ``SETTLED`` (post-reveal: betting +
+    cash-out are closed and the crash event reveals the seed) it MAY disclose
+    ``serverSeed`` + ``crashPoint`` — no exploitable advantage remains.
+
+    ``live_multiplier`` is the actor's last-published cosmetic tick when an
+    in-process actor supplies it (``None`` otherwise — the unwired-actor fence); it
+    is public either way (it is never an input to ``C``).
+    """
+    async with session_factory() as session:
+        round_row = await session.scalar(
+            select(GameRound)
+            .where(
+                GameRound.game_id == CRASH_GAME_ID,
+                GameRound.type == "MULTIPLAYER",
+            )
+            .order_by(GameRound.created_at.desc(), GameRound.nonce.desc())
+            .limit(1)
+        )
+        if round_row is None:
+            return {"round": None, "bets": []}
+        round_id = round_row.id
+        bet_rows = list(
+            (
+                await session.scalars(
+                    select(Bet).where(
+                        Bet.round_id == round_id,
+                        Bet.user_id == user_id,
+                        Bet.status == "ACTIVE",
+                    )
+                )
+            ).all()
+        )
+        audit_rows = (
+            await session.execute(
+                select(AuditEvent.bet_id, AuditEvent.payload).where(
+                    AuditEvent.round_id == round_id,
+                    AuditEvent.type == "BET_PLACED",
+                )
+            )
+        ).all()
+
+    autos: dict[str | None, float | None] = {
+        bet_id: (payload or {}).get("autoCashout") for bet_id, payload in audit_rows
+    }
+    server_state = round_row.server_state or {}
+    is_settled = round_row.status == "SETTLED"
+    round_view: dict[str, Any] = {
+        "roundId": round_id,
+        "roundNumber": round_row.nonce,
+        "serverSeedHash": commit(bytes.fromhex(server_state["roundSeed"])),
+        "status": round_row.status,
+        "multiplier": live_multiplier,
+    }
+    if is_settled:
+        # Post-reveal: the seed + outcome are public (the crash event revealed them).
+        round_view["serverSeed"] = server_state["roundSeed"]
+        round_view["crashPoint"] = float(server_state["C"])
+    bets = [
+        {
+            "betId": bet.id,
+            "stakeMinor": bet.stake_minor,
+            "status": bet.status,
+            "autoCashout": autos.get(bet.id),
+        }
+        for bet in bet_rows
+    ]
+    return {"round": round_view, "bets": bets}
+
+
+# --------------------------------------------------------------------------- #
+# Restart recovery — re-settle orphaned rounds + recover the round counter.
+# --------------------------------------------------------------------------- #
+async def next_crash_round_number(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> int:
+    """The next round number = ``max(nonce) + 1`` over persisted crash rounds (``1``
+    if none). Recovering the counter from the DB is what stops a restarted actor
+    from regenerating an existing ``round-{n}`` id (which would no-op
+    ``open_crash_round`` and broadcast a new curve over the OLD persisted ``C``)."""
+    async with session_factory() as session:
+        max_nonce = await session.scalar(
+            select(func.max(GameRound.nonce)).where(GameRound.game_id == CRASH_GAME_ID)
+        )
+    return int(max_nonce or 0) + 1
+
+
+async def _stuck_round_ids(
+    session: AsyncSession, *, ttl_seconds: int
+) -> list[str]:
+    """Crash round ids that still hold ≥1 ACTIVE bet AND are either already terminal
+    (a partial sweep) or older than the TTL (orphaned). The single membership test
+    both boot recovery (``ttl_seconds=0`` → every orphan) and the periodic
+    reconciler share."""
+    cutoff = datetime.now(UTC) - timedelta(seconds=ttl_seconds)
+    rows = await session.scalars(
+        select(GameRound.id)
+        .join(Bet, Bet.round_id == GameRound.id)
+        .where(
+            GameRound.game_id == CRASH_GAME_ID,
+            Bet.status == "ACTIVE",
+            (GameRound.status == "SETTLED") | (GameRound.created_at <= cutoff),
+        )
+        .distinct()
+    )
+    return list(rows.all())
+
+
+async def reconcile_crash_bets(
+    session_factory: async_sessionmaker[AsyncSession],
+    ledger: Ledger,
+    *,
+    ttl_seconds: int = DEFAULT_RECONCILE_TTL_SECONDS,
+) -> list[str]:
+    """Find rounds with bets stuck non-terminal (past the TTL, or in an already
+    terminal round) and re-settle each via the ONE settlement path
+    (``settle_crash_round`` — a pure idempotent replay). Returns the round ids it
+    reconciled."""
+    async with session_factory() as session:
+        round_ids = await _stuck_round_ids(session, ttl_seconds=ttl_seconds)
+    for round_id in round_ids:
+        await settle_crash_round(session_factory, ledger, round_id=round_id)
+    return round_ids
+
+
+async def recover_crash(
+    session_factory: async_sessionmaker[AsyncSession], ledger: Ledger
+) -> list[str]:
+    """Boot recovery: re-settle EVERY orphaned crash round (``ttl_seconds=0`` — on a
+    fresh boot nothing is legitimately in-progress) before any new round opens. The
+    committed seed already fixed ``C``, so each re-settle is deterministic. Reuses
+    the reconciler's one path (DRY)."""
+    return await reconcile_crash_bets(session_factory, ledger, ttl_seconds=0)
+
+
 __all__ = [
     "CRASH_GAME_ID",
+    "DEFAULT_RECONCILE_TTL_SECONDS",
     "CrashBetNotFound",
     "CrashBetRejected",
     "CrashBetResult",
     "CrashRoundNotFound",
+    "crash_state",
     "manual_cashout",
+    "next_crash_round_number",
     "open_crash_round",
     "place_crash_bet",
+    "recover_crash",
+    "reconcile_crash_bets",
     "settle_crash_round",
 ]
