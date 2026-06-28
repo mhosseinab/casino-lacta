@@ -70,14 +70,24 @@ async def funded_user(
 
 
 async def _open_round(
-    session_factory: async_sessionmaker[AsyncSession], round_number: int = 1
+    session_factory: async_sessionmaker[AsyncSession],
+    round_number: int = 1,
+    *,
+    min_c: float = 1.0,
 ) -> CrashRound:
-    rnd = CrashRound.open(
-        round_server_seed=_SEED,
-        round_id=f"round-{uuid4().hex}",
-        round_number=round_number,
-        edge=EDGE,
-    )
+    """Open + persist a round. ``min_c`` retries fresh round_ids until C >= min_c so a
+    test that derives an auto-cashout/stamp from ``C`` (e.g. ``round(C - 0.01, 2)``)
+    never lands below the ``>= 1.00`` placement guard when a random round_id yields the
+    instant-bust C == 1.00 (~2% of ids)."""
+    while True:
+        rnd = CrashRound.open(
+            round_server_seed=_SEED,
+            round_id=f"round-{uuid4().hex}",
+            round_number=round_number,
+            edge=EDGE,
+        )
+        if rnd.C >= min_c:
+            break
     await open_crash_round(session_factory, rnd)
     return rnd
 
@@ -123,7 +133,9 @@ async def test_auto_cashout_wins_iff_target_le_C(
     funded_user: tuple[str, str],
 ) -> None:
     user_id, wallet_id = funded_user
-    rnd = await _open_round(session_factory)
+    # min_c=1.5 so round(C - 0.01, 2) stays >= 1.00 (the placement guard) — without it
+    # an instant-bust C == 1.00 makes the edge-below target 0.99 and trips the guard.
+    rnd = await _open_round(session_factory, min_c=1.5)
     C = rnd.C
     stake = 1000
 
