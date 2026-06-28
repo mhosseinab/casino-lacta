@@ -159,6 +159,16 @@ REGISTRY: dict[str, tuple[str, GameConfig]] = {
     # copy to drift from). ``edge`` mirrors the JSON house edge (RTP 0.96), informational:
     # slot RTP emerges from the strips/paytable, never from ``edge``.
     "slots.machine01": ("engine.slots.framework", GameConfig(edge=0.04, params={})),
+    # Slots — machine02 (LOW volatility) + machine03 (HIGH volatility), spec §B.1.
+    # The S24 proof of "new machine = config + art, not code": BOTH point at the SAME
+    # engine.slots.framework GAME with EMPTY params (no per-machine engine code, no
+    # Python-literal params copy to drift). Each machine's strips/paytable/paylines/
+    # feature live as INERT DATA in its JSON (machine0{2,3}.json), loaded app-side
+    # (app.slots.load_machine) and seeded into the authoritative DB GameConfig.params
+    # (the sole runtime authority). Both are tuned to RTP 0.96 (edge 0.04, informational);
+    # they differ ONLY in volatility (per-spin payout variance), which is config, not code.
+    "slots.machine02": ("engine.slots.framework", GameConfig(edge=0.04, params={})),
+    "slots.machine03": ("engine.slots.framework", GameConfig(edge=0.04, params={})),
 }
 
 
