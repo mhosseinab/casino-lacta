@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum, IntEnum
+from typing import Any
 
 from engine.cards.evaluator import Card, rank_seven
 from engine.poker.pots import award_pots, build_pots
@@ -441,6 +442,71 @@ def _award_uncontested(state: TableState, winner: Seat) -> TableState:
         hand_over=True,
         awards={winner.seat_id: pot},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Per-seat redaction — the CLIENT-SAFE projection (S32's load-bearing invariant) #
+# --------------------------------------------------------------------------- #
+
+
+def _card_view(card: Card) -> dict[str, int]:
+    """Serialise one card to its public, JSON-safe shape."""
+    return {"rank": card.rank, "suit": card.suit}
+
+
+def public_view(state: TableState, viewer_seat: int | None) -> dict[str, Any]:
+    """The CLIENT-SAFE projection of a hand for ``viewer_seat`` (a WHITELIST).
+
+    Returns ONLY public table state (blinds, button, the *revealed* board, pot,
+    per-seat chip/position facts, whose turn, awards) plus the viewer's OWN hole
+    cards. It is a positive whitelist — a field is public only because it is named
+    here — so the two secrets can never leak by omission:
+
+    * another seat's :attr:`Seat.hole` is included ONLY for the viewer itself, or as
+      a legitimate **showdown reveal** of a non-folded seat once a real (≥2 survivors)
+      showdown has happened. A FOLDED seat's hole is NEVER revealed (it is mucked),
+      and the lone winner of an uncontested pot does not show.
+    * :attr:`TableState.community_undealt` (the board-to-come) is NEVER projected.
+
+    ``viewer_seat is None`` is the spectator/public projection (own-hole reveal is
+    disabled; showdown reveals still apply). Pure: stdlib + engine only — this is the
+    SAME projection the verifier and the WS actor consume, never re-implemented.
+    """
+    live = [s for s in state.seats if not s.folded]
+    showdown_reveal = state.hand_over and len(live) >= 2  # a true (contested) showdown
+    seats: list[dict[str, Any]] = []
+    for s in state.seats:
+        seat_view: dict[str, Any] = {
+            "seatId": s.seat_id,
+            "stack": s.stack,
+            "streetContrib": s.street_contrib,
+            "totalContrib": s.total_contrib,
+            "folded": s.folded,
+            "allIn": s.all_in,
+            "acted": s.acted,
+        }
+        is_own = viewer_seat is not None and s.seat_id == viewer_seat
+        if is_own or (showdown_reveal and not s.folded):
+            seat_view["hole"] = [_card_view(c) for c in s.hole]
+        seats.append(seat_view)
+    return {
+        "config": {
+            "smallBlind": state.config.small_blind,
+            "bigBlind": state.config.big_blind,
+        },
+        "button": state.button,
+        "sbSeat": state.sb_seat,
+        "bbSeat": state.bb_seat,
+        "street": int(state.street),
+        "toAct": state.to_act,
+        "currentBet": state.current_bet,
+        "lastFullRaise": state.last_full_raise,
+        "handOver": state.hand_over,
+        "board": [_card_view(c) for c in state.board],  # revealed community cards only
+        "pot": sum(s.total_contrib for s in state.seats),
+        "awards": dict(state.awards),
+        "seats": seats,
+    }
 
 
 def _showdown(state: TableState) -> TableState:
