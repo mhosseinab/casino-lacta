@@ -61,10 +61,11 @@ from engine.types import GameConfig, Outcome, RngStream
 
 @dataclass(frozen=True)
 class SlotMachine:
-    """Conforms to ``engine.types.InstantGame`` (spec §B.1).
+    """Designed to conform to ``engine.types.InstantGame`` (spec §B.1) — S23 supplies
+    the ``id`` when a concrete machine registers; the framework itself carries none.
 
     Stateless and config-driven: every machine is a distinct ``GameConfig`` fed to
-    the same evaluator. No ``id`` yet — a concrete machine registers one in S23.
+    the same evaluator (``validate_input`` + ``play`` match the seam shape already).
     """
 
     def validate_input(self, input: dict[str, Any], cfg: GameConfig) -> None:

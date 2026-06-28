@@ -190,6 +190,24 @@ def test_ways_multiplies_by_number_of_ways() -> None:
     assert out.multiplier == 8.0
 
 
+def test_ways_no_win_when_run_too_short() -> None:
+    # reel0 [A,A], reel1 [B,B], reel2 [A,A]: A run breaks at reel1 → run=1, no
+    # paytable["A"]["1"] → no way win, multiplier 0.
+    params = {
+        "reels": 3,
+        "rows": 2,
+        "mode": "ways",
+        "strips": [["A", "A"], ["B", "B"], ["A", "A"]],
+        "symbols": ["A", "B"],
+        "paytable": {"A": {"3": 4.0}},
+        "wild": None,
+        "scatter": None,
+    }
+    out = SlotMachine().play({}, SequenceRng([0.0, 0.0, 0.0]), _cfg(params))
+    assert out.detail["wayWins"] == []
+    assert out.multiplier == 0.0
+
+
 # --- mechanics: stop index, wraparound, draw count, determinism --------------
 
 
