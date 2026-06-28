@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Protocol
@@ -75,6 +76,11 @@ if TYPE_CHECKING:
 POKER_GAME_ID = "poker.nlhe"
 _REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 _SEED_BYTES = 32
+# Per-turn timeout (seconds) — CONFIG, not a literal sprinkled through the logic. It is a
+# transport concern (when the server acts FOR an absent player), so it lives on the actor,
+# never on the pure engine ``TableConfig``. The clock is injected (``now_fn``) so timeouts
+# are deterministic in tests; a timeout fires only when ``check_timeout`` is evaluated.
+_DEFAULT_TURN_TIMEOUT = 30.0
 
 # The client-safe table view projection — the ENGINE whitelist. The actor depends on the
 # abstraction (a pure ``(state, viewer) -> dict``) so the redaction lives in ONE audited
@@ -215,8 +221,16 @@ class PokerActor:
     applies player intents via the pure reducer, checkpoints the replay tuple, and
     publishes a PER-SEAT redacted view after every transition.
 
-    ``publisher``/``store``/``seed_factory``/``view_projection`` are injected (DIP): the
-    default ``view_projection`` is the engine whitelist — the only leak-proof projection.
+    ``publisher``/``store``/``seed_factory``/``view_projection``/``now_fn`` are injected
+    (DIP): the default ``view_projection`` is the engine whitelist — the only leak-proof
+    projection — and ``now_fn`` is a real monotonic clock that tests replace with a fake one
+    they advance manually (so timeouts are instant + deterministic, never a wall-clock wait).
+
+    S34 adds three transport concerns on top of S32, all routed through the SAME pure reducer
+    and the SAME redacting projection: per-turn timers (``check_timeout`` auto-acts an absent
+    player), disconnect/sit-out (``disconnect`` → auto-muck so play continues), and
+    reconnect/resync (``reconnect`` → a redacted snapshot to the returning seat only). No
+    money moves here (buy-in/rake is S33).
     """
 
     def __init__(
@@ -228,6 +242,8 @@ class PokerActor:
         *,
         seed_factory: Callable[[], bytes] = _default_seed,
         view_projection: ViewProjection = public_view,
+        now_fn: Callable[[], float] = time.monotonic,
+        turn_timeout: float = _DEFAULT_TURN_TIMEOUT,
     ) -> None:
         self._table_id = table_id
         self._config = config
@@ -235,6 +251,8 @@ class PokerActor:
         self._store = store
         self._seed_factory = seed_factory
         self._project = view_projection
+        self._now = now_fn
+        self._turn_timeout = turn_timeout
         # The deterministic replay tuple for the CURRENT hand.
         self._seed: bytes | None = None
         self._hand_number = 0
@@ -242,6 +260,9 @@ class PokerActor:
         self._button = 0
         self._action_log: list[Action] = []
         self._state: TableState | None = None
+        # Transport state (NOT part of the deterministic replay tuple — ephemeral).
+        self._turn_started_at: float | None = None  # when the current seat's turn began
+        self._sitout: set[int] = set()  # seats marked disconnected → auto-acted on their turn
 
     # -- properties ------------------------------------------------------- #
     @property
@@ -274,9 +295,13 @@ class PokerActor:
         self._button = button
         self._action_log = []
         self._state = state
+        self._mark_turn()
         await self._checkpoint()
         await self._broadcast()
-        return state
+        # If the new seat to act is already sitting out (disconnected), auto-act past it so
+        # the table never opens on an absent player.
+        await self._drain_sitouts()
+        return self.state
 
     async def act(self, *, seat: int, kind: str, amount: int = 0) -> TableState | None:
         """Apply one player INTENT. The server is authoritative: the reducer validates
@@ -295,11 +320,109 @@ class PokerActor:
             # Rejected before any state change (the reducer raises before mutating).
             await self._send_error(seat, str(exc))
             return None
+        result = await self._commit(action, new_state)
+        # If the next seat to act is sitting out, auto-act past it (no stall on an absentee).
+        await self._drain_sitouts()
+        return result
+
+    # -- turn timers / disconnect / reconnect (S34) ----------------------- #
+    def _mark_turn(self) -> None:
+        """Stamp when the CURRENT seat's turn began (the timeout basis). ``None`` once the
+        hand is over — there is then nothing to time out. Reset on every transition so each
+        seat gets its full clock; ephemeral, never part of the deterministic replay tuple."""
+        if self._state is None or self._state.to_act is None:
+            self._turn_started_at = None
+        else:
+            self._turn_started_at = self._now()
+
+    async def _commit(self, action: Action, new_state: TableState) -> TableState:
+        """The single mutation path: log the action, advance state, restart the turn clock,
+        checkpoint, and publish the per-seat redacted views. Manual and auto actions share
+        it so they are byte-identical to the ledger/replay."""
         self._action_log.append(action)
         self._state = new_state
+        self._mark_turn()
         await self._checkpoint()
         await self._broadcast()
         return new_state
+
+    def _auto_action_for(self, seat_id: int) -> Action:
+        """The server's auto-action for a seat that won't act: CHECK when it faces no bet
+        (its street contribution already matches), else FOLD (auto-muck when facing a bet).
+        Always legal — ``current_bet`` is the max street contribution, so a seat owes nothing
+        exactly when it can check, and the reducer accepts both."""
+        state = self.state
+        seat = state.seats[seat_id]
+        faces_bet = seat.street_contrib < state.current_bet
+        kind = ActionKind.FOLD if faces_bet else ActionKind.CHECK
+        return Action(seat=seat_id, kind=kind)
+
+    async def _auto_act(self, seat_id: int) -> TableState:
+        """Auto-act for ``seat_id`` THROUGH the pure reducer — never a hand-rolled edit."""
+        action = self._auto_action_for(seat_id)
+        return await self._commit(action, apply_action(self.state, action))
+
+    async def _drain_sitouts(self) -> None:
+        """Auto-act every sitting-out (disconnected) seat the instant it is to act, until a
+        connected seat is up or the hand ends — so an absent player never stalls the table.
+        Terminates: each auto-act either folds (live seats strictly decrease) or checks
+        (the street strictly advances), so the hand reaches showdown in bounded steps."""
+        while (
+            self._state is not None
+            and not self._state.hand_over
+            and self._state.to_act is not None
+            and self._state.to_act in self._sitout
+        ):
+            await self._auto_act(self._state.to_act)
+
+    async def check_timeout(self) -> TableState | None:
+        """The run-loop / test hook: if the seat to act has exceeded its turn timeout, auto-
+        act for it (CHECK with no bet to call, else FOLD), advancing the table exactly as a
+        manual action would. Returns the new state when an auto-act fired, else ``None``.
+        Deterministic: the deadline is ``now() - turn_started_at >= turn_timeout``."""
+        if (
+            self._state is None
+            or self._state.hand_over
+            or self._state.to_act is None
+            or self._turn_started_at is None
+        ):
+            return None
+        if self._now() - self._turn_started_at < self._turn_timeout:
+            return None
+        result = await self._auto_act(self._state.to_act)
+        # A timeout may have passed the turn to a sitting-out seat — drain it too.
+        await self._drain_sitouts()
+        return result
+
+    async def disconnect(self, seat_id: int) -> None:
+        """Mark a seat disconnected → SIT-OUT: it is auto-acted (auto-check / auto-muck) on
+        its turn so the remaining players play on. If it is already the seat to act, it is
+        auto-acted immediately; otherwise it is handled when the action reaches it."""
+        self._sitout.add(seat_id)
+        await self._drain_sitouts()
+
+    async def reconnect(self, seat_id: int) -> TableState | None:
+        """A returning client RESYNCs: clear its sit-out (it resumes its own check/fold
+        duties on its next turn) and deliver a redacted snapshot to ITS channel ONLY —
+        public state + only its own hole cards, projected through the SAME engine whitelist
+        (``public_view``), so reconnect can never leak another seat's holes or the undealt
+        board. A no-op snapshot (no hand in progress) returns ``None``."""
+        self._sitout.discard(seat_id)
+        if self._state is None:
+            return None
+        await self._send_snapshot(seat_id)
+        # Clearing sit-out for a seat that is NOT to act changes nothing else; but if some
+        # OTHER seat is still sitting out and now to act, keep the table moving.
+        await self._drain_sitouts()
+        return self._state
+
+    async def _send_snapshot(self, seat_id: int) -> None:
+        """Publish the current redacted view to ``seat_id``'s channel only (the resync). It
+        rides the same ``state`` event shape as a broadcast — built by the redacting
+        projection for exactly this viewer — so the client resumes with the correct view."""
+        view = self._project(self.state, seat_id)
+        view["serverSeedHash"] = self.server_seed_hash
+        await self._publish(seat_channel(self._table_id, seat_id), "state", view)
 
     # -- recovery --------------------------------------------------------- #
     @classmethod
@@ -334,6 +457,10 @@ class PokerActor:
             for a in checkpoint["actionLog"]
         ]
         actor._state = actor._replay()
+        # Turn timing is ephemeral (not in the replay tuple): start the clock now so a
+        # reloaded table can still time out an absent player — otherwise a restart would
+        # leave it un-timed and a sit-out could stall it forever.
+        actor._mark_turn()
         return actor
 
     @classmethod
