@@ -1,0 +1,14 @@
+{
+  "name": "@casino/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Casino (codename lacta) — generated TypeScript contracts. The OpenAPI schema is the seam; these types are generated from it, never hand-rolled.",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  }
+}
