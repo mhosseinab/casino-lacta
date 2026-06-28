@@ -53,8 +53,8 @@ def _cashout_multiplier(mines: int, k: int, nonce: int) -> float:
     safe = [c for c in range(25) if c not in set(state["mine_positions"])]
     assert len(safe) >= k
     for cell in safe[:k]:
-        state, _ = game.step(state, {"op": "reveal", "cell": cell})
-    state, outcome = game.step(state, {"op": "cashout"})
+        state, _ = game.step(state, {"op": "reveal", "cell": cell}, rng)
+    state, outcome = game.step(state, {"op": "cashout"}, rng)
     assert outcome is not None
     assert outcome.detail["status"] == "CASHED_OUT"
     return outcome.multiplier

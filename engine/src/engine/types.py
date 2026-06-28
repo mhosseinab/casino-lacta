@@ -95,7 +95,17 @@ class StatefulGame(Protocol):
         ...
 
     def step(
-        self, state: dict[str, Any], action: dict[str, Any]
+        self, state: dict[str, Any], action: dict[str, Any], rng: RngStream
     ) -> tuple[dict[str, Any], Outcome | None]:
-        """Advance state by one action; return (next_state, Outcome|None) — None until resolved."""
+        """Advance state by one action; return (next_state, Outcome|None) — None until resolved.
+
+        ``rng`` is injected per step — SYMMETRIC to :meth:`init` — so a game that draws
+        fresh entropy on each action (HiLo's next card) consumes it here, exactly as
+        ``init`` consumes the committed round-start draws. A game whose randomness is
+        fully committed at ``init`` (Mines) simply ignores ``rng`` and its stream cursor
+        does not advance. Entropy enters outcome logic ONLY through this seam — never
+        ``random``/``secrets`` — so the verifier reproduces the full step sequence by
+        driving the SAME stream forward through the SAME actions, and the app resumes a
+        mid-round stream purely from ``(serverSeed, clientSeed, nonce, cursor)``.
+        """
         ...

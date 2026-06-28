@@ -80,10 +80,12 @@ async def _seed_player(
 async def _server_state(
     session_factory: async_sessionmaker[AsyncSession], round_id: str
 ) -> dict:
+    """The OPAQUE per-game state, unwrapped from the saga's {cursor, game} envelope."""
     async with session_factory() as session:
         row = await session.get(GameRound, round_id)
     assert row is not None
-    return dict(row.server_state or {})
+    envelope = dict(row.server_state or {})
+    return dict(envelope.get("game") or {})
 
 
 async def _safe_cells(
@@ -357,10 +359,14 @@ async def test_action_reread_under_lock_prevents_lost_update(
         )
         await asyncio.sleep(0.5)
         assert not task.done(), "reveal proceeded without waiting on the row lock"
-        # Commit a concurrent reveal of A under the held lock, then release.
-        state = dict(locked.server_state or {})
-        state["revealed"] = [a_cell]
-        locked.server_state = state  # new dict → flushed on commit (with_begin exit)
+        # Commit a concurrent reveal of A under the held lock, then release. Mutate the
+        # OPAQUE game state inside the {cursor, game} envelope (cursor stays put — Mines
+        # draws no per-step entropy).
+        envelope = dict(locked.server_state or {})
+        game_state = dict(envelope.get("game") or {})
+        game_state["revealed"] = [a_cell]
+        envelope["game"] = game_state
+        locked.server_state = envelope  # new dict → flushed on commit (with_begin exit)
 
     resp = await asyncio.wait_for(task, timeout=5)  # lock released → reveal of B proceeds
     final = await _server_state(session_factory, rid)
@@ -427,7 +433,9 @@ async def test_active_round_projection_leaks_no_mine_positions(
         row = await session.get(GameRound, rid)
     assert row is not None
     assert "minePositions" not in (row.outcome or {})
-    assert row.server_state and "mine_positions" in row.server_state  # server-only
+    # The layout lives in the OPAQUE game state inside the {cursor, game} envelope —
+    # the server-only column — never in the client-facing outcome.
+    assert row.server_state and "mine_positions" in (row.server_state.get("game") or {})
 
 
 async def test_action_rejected_for_other_users_round(

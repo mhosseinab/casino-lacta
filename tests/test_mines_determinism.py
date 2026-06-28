@@ -34,6 +34,14 @@ def _init(input: dict[str, Any], nonce: int) -> dict[str, Any]:
     return _game().init(dict(input), rng, _cfg())
 
 
+# Mines IGNORES the per-step rng (its layout is committed at init), so any stream
+# instance is fine here — the protocol requires the parameter, the game discards it.
+def _step(
+    state: dict[str, Any], action: dict[str, Any]
+) -> tuple[dict[str, Any], Any]:
+    return _game().step(state, action, create_rng(SERVER_SEED, CLIENT_SEED, 0))
+
+
 # --- layout determinism ------------------------------------------------------
 
 
@@ -76,7 +84,7 @@ def _safe_cells(state: dict[str, Any]) -> list[int]:
 def test_safe_reveal_advances_k_and_reports_projection() -> None:
     state = _init({"mines": 3}, 1)
     safe = _safe_cells(state)
-    state, outcome = _game().step(state, {"op": "reveal", "cell": safe[0]})
+    state, outcome = _step(state, {"op": "reveal", "cell": safe[0]})
     assert outcome is not None
     assert outcome.detail["safe"] is True
     assert outcome.detail["k"] == 1
@@ -89,7 +97,7 @@ def test_safe_reveal_advances_k_and_reports_projection() -> None:
 def test_revealing_a_mine_loses_the_round() -> None:
     state = _init({"mines": 5}, 2)
     mine = state["mine_positions"][0]
-    state, outcome = _game().step(state, {"op": "reveal", "cell": mine})
+    state, outcome = _step(state, {"op": "reveal", "cell": mine})
     assert outcome is not None
     assert outcome.detail["safe"] is False
     assert outcome.detail["status"] == "LOST"
@@ -100,8 +108,8 @@ def test_re_revealing_a_safe_cell_is_a_noop() -> None:
     """Intrinsic idempotency: re-revealing an already-safe cell does not advance k."""
     state = _init({"mines": 3}, 4)
     safe = _safe_cells(state)
-    state, first = _game().step(state, {"op": "reveal", "cell": safe[0]})
-    again_state, again = _game().step(state, {"op": "reveal", "cell": safe[0]})
+    state, first = _step(state, {"op": "reveal", "cell": safe[0]})
+    again_state, again = _step(state, {"op": "reveal", "cell": safe[0]})
     assert again is not None and first is not None
     assert again.detail["k"] == first.detail["k"] == 1
     assert again_state["revealed"] == state["revealed"]
@@ -111,8 +119,8 @@ def test_cashout_after_reveals_settles_cashed_out() -> None:
     state = _init({"mines": 3}, 5)
     safe = _safe_cells(state)
     for cell in safe[:2]:
-        state, _ = _game().step(state, {"op": "reveal", "cell": cell})
-    state, outcome = _game().step(state, {"op": "cashout"})
+        state, _ = _step(state, {"op": "reveal", "cell": cell})
+    state, outcome = _step(state, {"op": "cashout"})
     assert outcome is not None
     assert outcome.detail["status"] == "CASHED_OUT"
     assert outcome.detail["k"] == 2
@@ -122,37 +130,37 @@ def test_cashout_after_reveals_settles_cashed_out() -> None:
 def test_cashout_requires_at_least_one_reveal() -> None:
     state = _init({"mines": 3}, 6)
     with pytest.raises(InvalidBetInput):
-        _game().step(state, {"op": "cashout"})
+        _step(state, {"op": "cashout"})
 
 
 def test_no_action_after_terminal_lost() -> None:
     state = _init({"mines": 5}, 8)
     mine = state["mine_positions"][0]
-    state, _ = _game().step(state, {"op": "reveal", "cell": mine})
+    state, _ = _step(state, {"op": "reveal", "cell": mine})
     safe = _safe_cells(state)
     with pytest.raises(InvalidBetInput):
-        _game().step(state, {"op": "reveal", "cell": safe[0]})
+        _step(state, {"op": "reveal", "cell": safe[0]})
     with pytest.raises(InvalidBetInput):
-        _game().step(state, {"op": "cashout"})
+        _step(state, {"op": "cashout"})
 
 
 def test_no_action_after_terminal_cashed_out() -> None:
     state = _init({"mines": 3}, 9)
     safe = _safe_cells(state)
-    state, _ = _game().step(state, {"op": "reveal", "cell": safe[0]})
-    state, _ = _game().step(state, {"op": "cashout"})
+    state, _ = _step(state, {"op": "reveal", "cell": safe[0]})
+    state, _ = _step(state, {"op": "cashout"})
     with pytest.raises(InvalidBetInput):
-        _game().step(state, {"op": "reveal", "cell": safe[1]})
+        _step(state, {"op": "reveal", "cell": safe[1]})
 
 
 def test_unknown_op_and_bad_cell_rejected() -> None:
     state = _init({"mines": 3}, 10)
     with pytest.raises(InvalidBetInput):
-        _game().step(state, {"op": "explode", "cell": 0})
+        _step(state, {"op": "explode", "cell": 0})
     with pytest.raises(InvalidBetInput):
-        _game().step(state, {"op": "reveal", "cell": 25})
+        _step(state, {"op": "reveal", "cell": 25})
     with pytest.raises(InvalidBetInput):
-        _game().step(state, {"op": "reveal", "cell": -1})
+        _step(state, {"op": "reveal", "cell": -1})
 
 
 # --- the input fence (validate_input) ---------------------------------------
