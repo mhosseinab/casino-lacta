@@ -4,8 +4,9 @@ ONE :class:`SlotMachine` resolves any machine from ``GameConfig.params``: it pic
 a **stop index per reel** from that reel's weighted strip via the seeded stream,
 builds the ``reels × rows`` grid (a ``rows``-tall window over the cyclic strip),
 evaluates **paylines** or **ways-to-win** against the paytable (wild substitution,
-scatter-anywhere), sums the base wins, and returns a single ``Outcome.multiplier``.
-No feature modules (free spins, hold-and-spin) — those land in S22.
+scatter-anywhere), sums the base wins, applies any triggered **feature modules**
+(S22 — free spins, hold-and-spin, pick bonus, via :func:`engine.slots.features.apply_features`),
+and returns a single ``Outcome.multiplier``.
 
 **RTP emerges from the strip weights + paytable — never a clamp.** A symbol's
 frequency on a reel's strip IS its probability; tuning RTP means editing the strips
@@ -23,7 +24,8 @@ Config schema (``GameConfig.params`` — JSON-round-trippable, string-keyed coun
       "paylines": [[row_per_reel, …], …],   # required for "lines"
       "wild": sym | null,             # substitutes for any line/ways symbol
       "scatter": sym | null,          # pays by total count anywhere
-      "scatterPaytable": {"<count>": multiplier, …}   # optional, scatter pays
+      "scatterPaytable": {"<count>": multiplier, …},  # optional, scatter pays
+      "features": [{"type": …, "trigger": {symbol, count}, …}]  # optional, S22
     }
 
 **Multiplier convention** (``Outcome.multiplier`` is payout / TOTAL stake):
@@ -56,6 +58,7 @@ from dataclasses import dataclass
 from math import floor
 from typing import Any, cast
 
+from engine.slots.features import apply_features
 from engine.types import GameConfig, Outcome, RngStream
 
 
@@ -79,7 +82,9 @@ class SlotMachine:
         Consumes EXACTLY ``reels`` draws (one stop per reel): for reel ``r`` the stop
         is ``floor(rng.next() · len(strip[r]))`` and the visible column is the
         ``rows``-tall window starting at that stop, wrapping the cyclic strip. The
-        grid is then evaluated by paylines or ways; scatter is added on top.
+        grid is then evaluated by paylines or ways; scatter is added on top; finally
+        any triggered feature consumes FURTHER draws from the SAME stream (so the
+        outcome stays a pure function of the seed).
         """
         params = cfg.params
         reels = cast("int", params["reels"])
@@ -108,6 +113,11 @@ class SlotMachine:
         if scatter_win is not None:
             detail["scatterWin"] = scatter_win
         total += scatter_total
+
+        feature_total, feature_results = apply_features(grid, rng, params)
+        if feature_results:
+            detail["features"] = feature_results
+        total += feature_total
 
         return Outcome(multiplier=total, detail=detail)
 
