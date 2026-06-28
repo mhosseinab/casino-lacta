@@ -44,7 +44,7 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S4  | Transport seam: GameClient + Http + Mock | passed | 1 | merged → main | d234add (merge 295c20d) | RNG quarantined to mock/; 11 tests; 401 re-auth+retry; crash WS union mirrors ws/crash.py. CARRY-FWD→S5/S8: HttpGameClient does NOT check res.ok before res.json() and fairness() always returns {available:true} — typed bet-error/RG-block envelope won't surface; close this when wiring bet errors / RG reasons |
 | S5  | App shell, lobby, auth/balance, badges | passed | 2 | merged → main | 7116dfd+fix 9b578cc (merge 948a63e) | 16-card lobby; server-only balance (SessionProvider); badges; GameRoute+test. CARRY-FWD: registry append contract is `'id': gameView(() => import('./dir/View')),` (one line) above the marker in client/src/games/registry.tsx |
 | S6  | PixiStage harness + reduced-motion | passed | 1 | merged → main | f525aa0 (merge 5e40812) | jsdom WebGL-probe seam; useReducedMotion. CARRY-FWD→S25: add vi.mock('pixi.js') lifecycle test (onReady/destroy-once/unmount-before-init race) — jsdom can't exercise teardown |
-| S7  | FairnessDrawer + verifier link | pending | 0 | — | — | demo notice in mock mode |
+| S7  | FairnessDrawer + verifier link | passed | 1 | cherry-picked → main | 1a14807 → cp 3732c25 | renders real disclosure; verifier URL is server-stamped (verifierUrl) rendered verbatim; demo/unavailable notice; 5 tests |
 | S8  | Shared BetControls + ResultPanel | pending | 0 | — | — | reused by all instant games |
 | S9  | Dice view (vertical slice) | pending | 0 | — | — | the reference pattern |
 | S10 | REVIEW GATE (human go) | pending | 0 | — | — | STOP before S11+ |
@@ -141,3 +141,20 @@ P7 Polish & ship
 - 2026-06-28: Aggregate check on `casino-client/main` @ 5e40812: tsc clean, vitest 20/20 (3 files),
   build OK, thin-renderer grep empty. Next eligible: **S4** (Transport seam; S2+S3 satisfied) → S5 →
   {S7,S8} → S9 → **S10 HUMAN GATE**.
+- 2026-06-28: **S4 PASSED** (reviewer PASS). Merged 295c20d. **S5 PASSED** (2 cycles; reviewer
+  required + accepted a GameRoute test). Merged 948a63e → progress e690113.
+- 2026-06-28: **⚠️ REMOTE/REBASE EVENT.** A real GitHub remote exists: `origin`
+  https://github.com/mhosseinab/casino-lacta.git . While S7 ran, the **user (MH)** committed
+  `Update pnpm-workspace.yaml` and ran `git pull --rebase origin casino-client/main`, pulling the
+  backend's `30923e4 Add faucets, observability suite, and client scaffold` + a `master` merge
+  (`663c1e9`) from origin and REPLAYING my client S1–S5 commits on top. Result: `casino-client/main`
+  moved e690113 → **9e35740** (new SHAs for the S5 commits; all content preserved; my toolchain fix
+  10b140f still ancestor; pnpm-workspace.yaml still has verifyDepsBeforeRun:false). **I am NOT the
+  only writer to this branch** — the user/backend push to origin and rebase. Mitigation going
+  forward: before each merge, re-check `casino-client/main`'s tip and rebase/cherry-pick the step
+  branch onto it. Per standing rules I do NOT push and do NOT pull --rebase unless the user asks.
+- 2026-06-28: **S7 PASSED** (reviewer PASS). Because cc-S7 was based on the pre-rebase line, I
+  CHERRY-PICKED its one unique commit (FairnessDrawer, new files) onto the new main → **3732c25**.
+  Aggregate check @ 3732c25: pnpm install OK, tsc clean, vitest **47/47 (12 files)**, build OK,
+  thin-renderer grep clean (only a doc comment in AppShell.test.tsx). Next eligible: **S8** (needs
+  S5,S3 ✓) → S9 (needs S6,S7,S8) → **S10 HUMAN GATE**.
