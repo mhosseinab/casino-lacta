@@ -10,8 +10,10 @@ Cloudflare Pages.
 
 Run steps in dependency order (graph below). Paste a step's fenced **prompt** into a fresh worker
 subagent, then run its **Verify** block before proceeding. Each step lands, verifies, and commits on
-its own branch `casino-client/S<N>` off `casino-client/main`. The change is purely additive — nothing
-is destructive — so rollback is "don't merge the branch." Two human gates: **S10** (review gate, after
+its own branch `casino-client/S<N>` off `casino-client/main`, in its **own dedicated git worktree**
+(`.worktrees/cc-S<N>` or sibling `../.casino-wt/cc-S<N>`) — **never the shared top-level tree**, which
+holds in-flight backend work (`casino-games/*`). The change is purely additive — nothing is
+destructive — so rollback is "don't merge the branch." Two human gates: **S10** (review gate, after
 the Dice slice) and **S28** (paid Cloudflare Pages deploy, LAST).
 
 ## Decisions baked in (final, 2026-06-28 — from plan §4)
@@ -58,6 +60,11 @@ the Dice slice) and **S28** (paid Cloudflare Pages deploy, LAST).
    spec Appendix A § for that game, and capture a REAL `BetObject`/state fixture (from a backend test
    or the mock) before writing the view. For React/Vite/Pixi/Vitest/RTL API specifics use Context7
    (`resolve-library-id` → `query-docs`) — don't guess framework syntax.
+9. **Dedicated worktree per step (MANDATORY).** Every step is implemented in its own git worktree off
+   `casino-client/main` (`.worktrees/cc-S<N>`), never the shared top-level checkout — that checkout
+   carries uncommitted backend work and editing/committing there can capture it into a client commit.
+   (Sandbox/mount note: if `unlink` is blocked, rename stale `.git/**/*.lock` aside before each git op
+   and keep operations single-purpose.)
 
 ## Dependency graph (quick view)
 

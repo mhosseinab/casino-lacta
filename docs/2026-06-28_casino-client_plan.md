@@ -175,6 +175,11 @@ Ordering invariant: build + validate the **vertical slice** before scaling; gate
 and the paid deploy (S28); nothing destructive (there is nothing to decommission — this is purely
 additive). Each game ships independently; a half-built lobby still builds and passes.
 
+**Execution: dedicated worktrees, always.** `casino-client/main` is checked out in its own worktree
+(`.worktrees/cc-main`), and every step runs in its own worktree (`.worktrees/cc-S<N>`) off it — never
+the shared top-level checkout, which carries in-flight backend work. This keeps client commits clean
+and reviews scoped. See the orchestrator doc for the loop and the sandbox `unlink`/lock caveat.
+
 ### P1 — Foundations + vertical slice (S1–S10) — gated
 Scaffold, contract seam, transport seam + mock, money utils, app shell + lobby + auth/balance,
 PixiStage harness, fairness drawer, shared bet controls, then the **Dice** slice. **Acceptance:** `pnpm

@@ -48,8 +48,23 @@ SETUP (once, before S1):
      REVIEW step.
 3. Confirm the verify toolchain runs here: `pnpm install`, `pnpm exec biome check`,
    `pnpm --filter @casino/client exec tsc --noEmit`, `pnpm --filter @casino/client exec vitest run`,
-   `pnpm --filter @casino/client build`, and `task contracts`. Create a git worktree (if supported)
-   and the integration branch `casino-client/main` off the current HEAD of casino-games/main.
+   `pnpm --filter @casino/client build`, and `task contracts`. Create the integration branch
+   `casino-client/main` off the current HEAD of `casino-games/main`, and check it out in a
+   **DEDICATED git worktree** (MANDATORY — never work in the shared top-level tree, which holds
+   in-flight backend work). Use a sibling `../.casino-wt/cc-main` if reachable, else an in-repo,
+   git-ignored `.worktrees/cc-main`. (Sandbox note: if the filesystem blocks `unlink`, clear any
+   stale `.git/**/*.lock` by renaming them aside before each git op, and prefer per-step worktrees so
+   indexes never collide.)
+
+WORKTREE DISCIPLINE (applies to EVERY step — non-negotiable):
+- Create a FRESH worktree per step off casino-client/main:
+  `git worktree add -b casino-client/S<N> .worktrees/cc-S<N> casino-client/main`
+  (or sibling `../.casino-wt/cc-S<N>`). The worker does ALL reads/edits/tests/commits inside it.
+- Merge to casino-client/main FROM the cc-main worktree, then tear the step worktree down:
+  `git worktree remove .worktrees/cc-S<N>` and `git branch -d casino-client/S<N>`.
+- The shared top-level checkout is OFF-LIMITS for client work (it carries casino-games/* WIP — editing
+  there can capture that WIP into a client commit). If a crashed step leaves a stale entry, run
+  `git worktree prune`.
 
 THE LOOP — drive the steps as a DAG, not a flat list. A step is ELIGIBLE when all its prerequisites
 are "passed". Dispatch INDEPENDENT eligible steps (disjoint files, no edge) CONCURRENTLY; SERIALIZE
@@ -62,9 +77,14 @@ never let two branches edit it concurrently without a rebase).
 For each step in flight:
 
 1) DISPATCH WORKER (a FRESH subagent every time — the main context-hygiene mechanism):
-   - From casino-client/main, create casino-client/S<N> (worktree if supported).
+   - From casino-client/main, create branch casino-client/S<N> AND a DEDICATED worktree for it
+     (MANDATORY — never the shared tree):
+     `git worktree add -b casino-client/S<N> .worktrees/cc-S<N> casino-client/main`
+     (or sibling `../.casino-wt/cc-S<N>`). Pass the worktree PATH to the worker.
    - Spawn a worker subagent whose prompt is:
-       "Read CLAUDE.md, the add-game-ui skill, and the files named in the step first. For React /
+       "You are working in a DEDICATED git worktree on branch casino-client/S<N> (path given) —
+        all reads/edits/commits happen there, NEVER in the shared top-level working tree.
+        Read CLAUDE.md, the add-game-ui skill, and the files named in the step first. For React /
         Vite / PixiJS v8 / Vitest / RTL API specifics use Context7 (resolve-library-id →
         query-docs) — do NOT guess framework syntax. Implement ONLY this step:
         <paste the step's prompt text from the implementation-steps doc>.
@@ -76,8 +96,8 @@ For each step in flight:
         step touches the contract, run `task contracts` and commit the generated file too.
         Then RUN this step's Verify block yourself and paste the ACTUAL command output:
         <paste the step's Verify block>.
-        Commit on casino-client/S<N>: stage files BY NAME (not add-all), Conventional Commits, don't
-        bypass hooks, never force-push. Keep context lean.
+        Commit IN THIS WORKTREE on casino-client/S<N>: stage files BY NAME (not add-all), Conventional
+        Commits, don't bypass hooks, never force-push. Keep context lean.
         Report: files changed, a concise diff summary, the Verify output (pass/fail), and anything you
         could not satisfy."
    - The worker MUST actually run the verification and paste output. If Verify fails, it fixes until
@@ -95,8 +115,10 @@ For each step in flight:
      Do NOT fix anything.
 
 3) FEEDBACK LOOP:
-   - PASS and Verify green → merge casino-client/S<N> onto casino-client/main (rebase first if it
-     touches registry.tsx), record SHA + "passed" in the progress file, go to (4).
+   - PASS and Verify green → from the cc-main worktree, merge casino-client/S<N> onto
+     casino-client/main (rebase first if it touches registry.tsx); then TEAR DOWN the step worktree
+     (`git worktree remove .worktrees/cc-S<N>` + `git branch -d casino-client/S<N>`); record SHA +
+     "passed" in the progress file, go to (4).
    - CHANGES_REQUESTED → dispatch a FRESH fix worker (given the branch diff + the numbered issues):
      "Address these review issues, re-run the Verify block, paste output." Then back to (2). Cap at 3
      review cycles per step.
@@ -107,6 +129,8 @@ For each step in flight:
 4) CONTEXT HYGIENE + ADVANCE:
    - Update the progress file (status, SHA, one-line note, append to the Log). Carry forward any
      constraint a later step must honor (e.g. a contract field a view depends on).
+   - Confirm the step's worktree is gone (`git worktree list` shows no `cc-S<N>`; `git worktree prune`
+     if a crash left it stale) so worktrees don't accumulate.
    - Compact your own context (durable state is the progress file, not the transcript).
    - Move to the next eligible step(s).
 
@@ -138,10 +162,15 @@ Begin now with SETUP, then S1. Report a one-line status after each step; keep pr
    `packages/` diff. For the CI/deploy/secrets surface (S26–S28) add a `/security-review` pass
    (CORS, `_headers` CSP, no committed secrets). If an agent can't be spawned, fall back to a fresh
    reviewer subagent with the checklist embedded in the REVIEW step.
-2. **Integration branch is `casino-client/main` off `casino-games/main`** (the backend integration
-   branch / current HEAD). Branch + worktree per step keeps each review a clean scoped diff; a failed
-   step is discarded without unwinding others. The whole client reaches the trunk via one PR at the
-   end.
+2. **Dedicated worktrees are MANDATORY — never the shared tree.** `casino-client/main` is checked
+   out in its own worktree (`.worktrees/cc-main`, or sibling `../.casino-wt/cc-main`) and EVERY step
+   runs in its own worktree `.worktrees/cc-S<N>` off it. The shared top-level checkout holds in-flight
+   backend work (`casino-games/*`); editing/committing there risks capturing that WIP into a client
+   commit (it happened once and had to be rebuilt). Worktree-per-step also gives review a clean scoped
+   diff and lets a failed step be discarded without unwinding others. The client reaches the trunk via
+   one PR at the end. **Sandbox/mount note:** if the filesystem blocks `unlink` (rename works), a
+   crashed git op can leave stale `.git/**/*.lock` and `MERGE_HEAD`; clear them by renaming aside
+   before the next op, and keep each git operation small/single-purpose.
 3. **`registry.tsx` is the one shared file** across the parallel game steps (S9, S11–S24). Each step
    appends a single lazy-import entry. Rebase the later parallel branch onto `casino-client/main`
    before merging so the appends stack cleanly — do not let two registry edits race.
