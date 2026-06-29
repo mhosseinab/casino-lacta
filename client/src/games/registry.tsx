@@ -38,6 +38,7 @@ export function gameView(
  */
 export const gameViews: Record<string, GameView> = {
   'originals.dice': gameView(() => import('./dice/DiceView')),
+  'originals.limbo': gameView(() => import('./limbo/LimboView')),
 };
 
 /** True once a game step has registered a view for this id. */

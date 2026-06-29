@@ -48,7 +48,7 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S8  | Shared BetControls + ResultPanel | passed | 1 | merged → main | 69f353c (merge 4b7f2ac) | BetControls(parseStakeToMinor, integer quick-stakes, rejectionReason prop) + ResultPanel(server-verbatim, FairnessDrawer wired); 10 tests. CARRY-FWD: ResultPanel assumes Dice-shaped outcome{multiplier,payoutMinor} — generalize for slots/table later |
 | S9  | Dice view (vertical slice) | passed | 3 | merged → main | 404d986+fix 21e3e04 (merge 57187c8) | reference pattern; closed S4 res.ok via typed BetRejectedError. CARRY-FWD: (a) PixiStage redraw seam = game stage captures app+ready flag, redraws in useEffect keyed on outcome, returns draw cleanup (S11–S24 contract, documented in DiceStage); (b) redraw keys on outcome VALUE — Plinko(S17)/Crash(S18)/slots must key on bet identity (betId/nonce) for repeated identical outcomes; (c) extract pure landing math + unit-test it per game; (d) generic transport-error UI state |
 | S10 | REVIEW GATE (human go) | **PASSED (go given)** | 0 | — | — | 2026-06-29 human "go". Dice redesigned to Gamdom layout first; screenshots dropped in client/screenshot/ as inspiration. FairnessDrawer post-bet-only accepted for v1. |
-| S11 | Limbo view | in_progress | 0 | casino-client/main · wt cc-main | — | touches registry.tsx; ref client/screenshot/limbo.png |
+| S11 | Limbo view | passed | 1 | casino-client/main · wt cc-main | (this commit) | reviewer PASS after adding losing-outcome test + dropping unused limboWon. Reuses Dice pattern (LimboMeter count-up, LIMBO_PREVIEW_EDGE preview seam). outcome={generated,target,won,multiplier,payoutMinor}; input={target}. |
 | S12 | Pocket Dice view | pending | 0 | — | — | touches registry.tsx |
 | S13 | Keno view | pending | 0 | — | — | touches registry.tsx |
 | S14 | Roulette 0–99 view (originals.roulette) | pending | 0 | — | — | touches registry.tsx |
@@ -189,3 +189,16 @@ P7 Polish & ship
 - 2026-06-29: **✅ S10 GATE CLEARED — human "go" given** ("commit then go next step"; human also
   dropped Gamdom reference screenshots in `client/screenshot/` as visual inspiration for the game
   views). Proceeding to the post-gate Originals fan-out starting with **S11 Limbo**.
+- 2026-06-29: **S11 PASSED** (1 review cycle; frontend-renderer-reviewer). Limbo view on the Dice
+  reference pattern: `limboMath.ts` (preview quote; `LIMBO_PREVIEW_EDGE`=1% = win-chance/profit only;
+  authoritative multiplier/payout off `bet.outcome`), `LimboMeter.tsx` (cosmetic count-up to the
+  server `generated`, pure `limboLanding`, reduced-motion immediate, keyed on betId), `LimboView.tsx`
+  (sends `input:{target}`, re-fetches balance, typed rejection + neutral transport-fault). Registered
+  `originals.limbo`; mock `fakeLimbo` (quarantine) for demo. Verified engine outcome keys against
+  engine/games/limbo.py + bet_loop (generated/target/won + multiplier + payoutMinor). Reviewer
+  CHANGES_REQUESTED → added a LOSING-result test (0×/0.00, no phantom credit) + removed unused
+  `limboWon`; re-review PASS. Verify @ working tree: tsc clean, vitest **101/101 (20 files)**, biome
+  clean, vite build OK (LimboView code-split 4.97kB), RNG quarantine clean. Browser-confirmed: win
+  chance 49.50% (spec edge, not Gamdom 49%), winning bet renders count-up + "Won at 14.73×" + SETTLED
+  panel + balance re-fetch 10000→10001. Next eligible (post-gate fan-out): S12 Pocket Dice, S13 Keno,
+  S14 Roulette 0–99 (each appends one line to registry.tsx — serialize).

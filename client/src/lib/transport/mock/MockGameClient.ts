@@ -139,7 +139,9 @@ export class MockGameClient implements GameClient {
     const outcome =
       gameId === 'originals.dice'
         ? this.fakeDice(input)
-        : this.fakeGeneric(input);
+        : gameId === 'originals.limbo'
+          ? this.fakeLimbo(input)
+          : this.fakeGeneric(input);
     this.balanceMinor += (outcome.payoutMinor as number) - input.stakeMinor;
     const now = new Date().toISOString();
     return {
@@ -188,6 +190,21 @@ export class MockGameClient implements GameClient {
       multiplier,
       payoutMinor,
     };
+  }
+
+  // Fabricate a contract-shaped LIMBO outcome (spec §A.3) so demo mode shows the
+  // mechanic: a generated multiplier X from the shared crash curve, win when
+  // X ≥ target (pays `target`), else 0. Still make-believe (no server seeds) — the
+  // real generated value/payout always come from the server. Demo quarantine only.
+  private fakeLimbo(input: BetRequest): Record<string, unknown> {
+    const target = Number((input.input as { target?: number })?.target ?? 2);
+    // X = max(1.00, floor((1−edge)/(1−f) * 100)/100), f ∈ [0,1) — same curve as Crash.
+    const f = Math.random();
+    const generated = Math.max(1, Math.floor((0.99 / (1 - f)) * 100) / 100);
+    const won = generated >= target;
+    const multiplier = won ? target : 0;
+    const payoutMinor = Math.floor(input.stakeMinor * multiplier);
+    return { demo: true, generated, target, won, multiplier, payoutMinor };
   }
 
   private fakeGeneric(input: BetRequest): Record<string, unknown> {
