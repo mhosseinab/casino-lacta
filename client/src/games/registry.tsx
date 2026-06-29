@@ -39,6 +39,12 @@ export function gameView(
 export const gameViews: Record<string, GameView> = {
   'originals.dice': gameView(() => import('./dice/DiceView')),
   'originals.limbo': gameView(() => import('./limbo/LimboView')),
+  'originals.pocketdice': gameView(() => import('./pocketdice/PocketDiceView')),
+  'originals.keno': gameView(() => import('./keno/KenoView')),
+  'originals.roulette': gameView(() => import('./roulette/RouletteView')),
+  'originals.mines': gameView(() => import('./mines/MinesView')),
+  'originals.hilo': gameView(() => import('./hilo/HiLoView')),
+  'originals.plinko': gameView(() => import('./plinko/PlinkoView')),
 };
 
 /** True once a game step has registered a view for this id. */

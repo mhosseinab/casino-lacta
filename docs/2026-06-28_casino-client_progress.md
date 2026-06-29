@@ -49,12 +49,12 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S9  | Dice view (vertical slice) | passed | 3 | merged → main | 404d986+fix 21e3e04 (merge 57187c8) | reference pattern; closed S4 res.ok via typed BetRejectedError. CARRY-FWD: (a) PixiStage redraw seam = game stage captures app+ready flag, redraws in useEffect keyed on outcome, returns draw cleanup (S11–S24 contract, documented in DiceStage); (b) redraw keys on outcome VALUE — Plinko(S17)/Crash(S18)/slots must key on bet identity (betId/nonce) for repeated identical outcomes; (c) extract pure landing math + unit-test it per game; (d) generic transport-error UI state |
 | S10 | REVIEW GATE (human go) | **PASSED (go given)** | 0 | — | — | 2026-06-29 human "go". Dice redesigned to Gamdom layout first; screenshots dropped in client/screenshot/ as inspiration. FairnessDrawer post-bet-only accepted for v1. |
 | S11 | Limbo view | passed | 1 | casino-client/main · wt cc-main | (this commit) | reviewer PASS after adding losing-outcome test + dropping unused limboWon. Reuses Dice pattern (LimboMeter count-up, LIMBO_PREVIEW_EDGE preview seam). outcome={generated,target,won,multiplier,payoutMinor}; input={target}. |
-| S12 | Pocket Dice view | pending | 0 | — | — | touches registry.tsx |
-| S13 | Keno view | pending | 0 | — | — | touches registry.tsx |
-| S14 | Roulette 0–99 view (originals.roulette) | pending | 0 | — | — | touches registry.tsx |
-| S15 | Mines view (stateful) | pending | 0 | — | — | /action + /state resume |
-| S16 | HiLo view (stateful) | pending | 0 | — | — | /action + /state resume |
-| S17 | Plinko view (animated drop) | pending | 0 | — | — | lands on SERVER slot |
+| S12 | Pocket Dice view | passed | 1 | casino-client/main · wt cc-main | 8ecc5d0 | reviewer PASS. {target,direction}; outcome {dice,sum,target,direction,won,multiplier,payoutMinor}; UNDER 2 / OVER 12 clamped unselectable (component-tested). 28 tests. |
+| S13 | Keno view | passed | 1 | casino-client/main · wt cc-main | cea6f52 | reviewer PASS. {picks,risk}; outcome {drawn,hits,picks,risk,multiplier,payoutMinor}; NO client payout table, NO pre-bet quote (server-tabled). 29 tests. |
+| S14 | Roulette 0–99 view (originals.roulette) | passed | 1 | casino-client/main · wt cc-main | 6a2179b | reviewer PASS. single-colour v1: {bets:[{value,stakeMinor==stake}]}; colours UPPERCASE GREEN/RED/BLACK; outcome {result,colour,settlements,multiplier,payoutMinor}. 21 tests. |
+| S15 | Mines view (stateful) | passed | 1 | casino-client/main · wt cc-main | ed03cfd | reviewer PASS. FIRST stateful: bet()→ACTIVE public_view (not a settle); roundId==betId; reveal/cashout via /action; debit@open, credit@cashout; minePositions only at terminal; geometry-only math. 12 tests. |
+| S16 | HiLo view (stateful) | passed | 1 | casino-client/main · wt cc-main | 0980e82 | reviewer PASS. bet()→ACTIVE {shownRank,1.00×}; /action guess discriminated by status (loss→revealedRank); cashout@steps≥1; debit@open, credit@cashout; neutral catch on guess/cashout faults (added post-review). 8 tests. |
+| S17 | Plinko view (animated drop) | passed | 1 | casino-client/main · wt cc-main | a9df5f0 | reviewer PASS. {rows∈{8,12,16},risk}; outcome {rows,risk,bin,rightBounces,path,multiplier,payoutMinor}; ball lands on SERVER bin (path↔bin invariant tested); animation keyed on betId; NO client payout table. 36 tests. |
 | S18 | Crash view (WebSocket realtime) | pending | 0 | — | — | server-stamped cashout |
 | S19 | Slots reel framework (data-driven) | pending | 0 | — | — | reels stop on server grid |
 | S20 | Wire 3 slot machines + Taskfile | pending | 0 | — | — | depends S19 |
@@ -202,3 +202,17 @@ P7 Polish & ship
   chance 49.50% (spec edge, not Gamdom 49%), winning bet renders count-up + "Won at 14.73×" + SETTLED
   panel + balance re-fetch 10000→10001. Next eligible (post-gate fan-out): S12 Pocket Dice, S13 Keno,
   S14 Roulette 0–99 (each appends one line to registry.tsx — serialize).
+- 2026-06-29: **S12–S17 PASSED — 6-game parallel fan-out** (human: "fanout as much as you can for each
+  game; screenshots are inspiration"). Six worker subagents each built ONE game under
+  `client/src/games/<id>/` (TDD, local FakeGameClient, scoped verify), forbidden from the two serialize
+  points; the orchestrator owned `registry.tsx` + `MockGameClient.ts` (avoids the concurrent-edit
+  conflict) and the demo-mock machinery (4 instant fakes + real per-round state for Mines/HiLo so they
+  are playable in the deployed demo, not dead tiles). Engine outcome KEYS were verified from engine
+  source first (the `as`-cast footgun). Per-game commits: S12 8ecc5d0, S13 cea6f52, S14 6a2179b,
+  S15 ed03cfd, S16 0980e82, S17 a9df5f0; wiring (registry+mock+this doc) in the following commit. All
+  six routed to `frontend-renderer-reviewer` → **6× VERDICT PASS**; two non-blocking fixes applied
+  (HiLo neutral catch on guess/cashout faults + test; Pocket Dice clampTarget component test). Full
+  gate @ working tree: tsc clean, biome clean, **vitest 240/240 (36 files)**, vite build OK (all 6
+  views code-split), RNG quarantine clean (only a pre-existing test comment). NOT pushed (user handles
+  pushes). Next eligible (post-gate): S18 Crash (realtime WS), S19→S20 Slots, {S21–S24} table/video
+  poker — and S25 a11y pass once all game steps land.
