@@ -45,6 +45,7 @@ export const gameViews: Record<string, GameView> = {
   'originals.mines': gameView(() => import('./mines/MinesView')),
   'originals.hilo': gameView(() => import('./hilo/HiLoView')),
   'originals.plinko': gameView(() => import('./plinko/PlinkoView')),
+  'originals.crash': gameView(() => import('./crash/CrashView')),
 };
 
 /** True once a game step has registered a view for this id. */

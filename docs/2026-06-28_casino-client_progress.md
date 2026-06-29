@@ -55,7 +55,7 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S15 | Mines view (stateful) | passed | 1 | casino-client/main · wt cc-main | ed03cfd | reviewer PASS. FIRST stateful: bet()→ACTIVE public_view (not a settle); roundId==betId; reveal/cashout via /action; debit@open, credit@cashout; minePositions only at terminal; geometry-only math. 12 tests. |
 | S16 | HiLo view (stateful) | passed | 1 | casino-client/main · wt cc-main | 0980e82 | reviewer PASS. bet()→ACTIVE {shownRank,1.00×}; /action guess discriminated by status (loss→revealedRank); cashout@steps≥1; debit@open, credit@cashout; neutral catch on guess/cashout faults (added post-review). 8 tests. |
 | S17 | Plinko view (animated drop) | passed | 1 | casino-client/main · wt cc-main | a9df5f0 | reviewer PASS. {rows∈{8,12,16},risk}; outcome {rows,risk,bin,rightBounces,path,multiplier,payoutMinor}; ball lands on SERVER bin (path↔bin invariant tested); animation keyed on betId; NO client payout table. 36 tests. |
-| S18 | Crash view (WebSocket realtime) | pending | 0 | — | — | server-stamped cashout |
+| S18 | Crash view (WebSocket realtime) | passed (spectator) | 2 | casino-client/main · wt cc-main | (this commit) | reviewer PASS (cycle 2). SPECTATOR slice: crashSocket → cosmetic curve + phase banner (WAITING/RUNNING/CRASHED) + per-round fairness reveal (serverSeedHash live → serverSeed+crashPoint at CRASHED) + reconnect-with-backoff (error→close coalesced) + /state resume. Pure crashCurve reducer/backoff/geometry. 14 tests. **Betting/cash-out DEFERRED**: server exposes Crash as read-only fan-out (no client-facing place-bet/cash-out endpoint; GameClient seam has no crash bet/cash-out method) — needs backend work in the casino-games worktree. Human chose spectator-now. |
 | S19 | Slots reel framework (data-driven) | pending | 0 | — | — | reels stop on server grid |
 | S20 | Wire 3 slot machines + Taskfile | pending | 0 | — | — | depends S19 |
 | S21 | Blackjack view (stateful) | pending | 0 | — | — | /action + /state |
@@ -216,3 +216,21 @@ P7 Polish & ship
   views code-split), RNG quarantine clean (only a pre-existing test comment). NOT pushed (user handles
   pushes). Next eligible (post-gate): S18 Crash (realtime WS), S19→S20 Slots, {S21–S24} table/video
   poker — and S25 a11y pass once all game steps land.
+- 2026-06-29: **S18 PASSED (spectator scope) — 2 review cycles** (human "do it"). DISCOVERED the
+  betting half of S18 is blocked: the server's Crash WS (`app/ws/crash.py`) is read-only fan-out (no
+  inbound receive), `actor.place_bet`/`cash_out` are never wired to any request handler, `originals.crash`
+  isn't in the engine registry (generic `/bet` can't resolve it), and the `GameClient` seam has no crash
+  bet/cash-out method — so client betting needs backend work in the casino-games worktree. Surfaced the
+  fork to the human (AskUserQuestion) → chose **spectator view now**. Built `client/src/games/crash/`:
+  `crashCurve.ts` (pure reducer + resume mapper + deterministic backoff + SVG geometry), `CrashStage.tsx`
+  (cosmetic SVG curve + live multiplier), `CrashView.tsx` (crashSocket subscription, /state resume,
+  reconnect-with-backoff, per-round fairness reveal, spectator notice). frontend-renderer-reviewer cycle 1
+  → CHANGES_REQUESTED: a browser's error→close pair scheduled TWO reconnects (leaked socket + doubled
+  events) and the test only fired close alone. FIXED: coalesce reconnect (bail if a timer is pending; null
+  it when it fires) + added an error→close test whose 60s assertion pins the leaked-socket bug. Cycle 2 →
+  PASS. Verify: tsc clean, biome clean, **vitest 254/254 (37 files)**, build OK (CrashView code-split
+  6.15kB), S18 grep gate clean (no client-time cashout / no RNG). Demo-playable (mock already simulates
+  round→tick→crash). NOT pushed. **Follow-up (backend, casino-games):** expose crash place-bet +
+  server-stamped cash-out (wire `actor.place_bet`/`cash_out` via WS-inbound or REST) + extend the seam +
+  contracts; THEN layer betting onto this spectator view. Next client: S19→S20 Slots, S21–S24 table/video
+  poker, S25 a11y.
