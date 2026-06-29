@@ -137,6 +137,10 @@ export default function MinesView() {
       if (status === 'LOST') {
         setHitCell(cell);
         setMinePositions((proj.minePositions as number[]) ?? []);
+        // A bust pays nothing — clear the cashout multipliers so the last safe
+        // value can't linger next to "Busted" and read as a phantom win.
+        setCurrentMultiplier(null);
+        setNextMultiplier(null);
         setPhase('lost');
         await refreshBalance(); // a loss credits nothing; balance re-read regardless
         return;

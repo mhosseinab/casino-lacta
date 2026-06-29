@@ -229,6 +229,44 @@ describe('MinesView — thin renderer of a server-held Mines round', () => {
     await waitFor(() => expect(client.meCalls).toBe(3));
   });
 
+  it('clears the Current multiplier on a bust after prior safe reveals (no stale value)', async () => {
+    // Real-world flow: reveal a gem (Current → 1.13×), THEN hit a mine. The bust
+    // pays nothing, so the lingering "1.13×" must not stay on screen next to
+    // "Busted" — a stale number reads to a player as a wrong calculation.
+    const safe: GameStateProjection = {
+      cell: 6,
+      safe: true,
+      k: 1,
+      currentMultiplier: 1.13,
+      nextMultiplier: 1.29,
+      status: 'ACTIVE',
+      roundId: OPEN_BET_ID,
+    };
+    const hit: GameStateProjection = {
+      cell: 2,
+      safe: false,
+      k: 1,
+      status: 'LOST',
+      minePositions: [2, 7, 19],
+      roundId: OPEN_BET_ID,
+    };
+    const client = new FakeGameClient({ actions: [safe, hit] });
+    renderMines(client);
+    await openRound();
+
+    await userEvent.click(screen.getByLabelText('Cell 6'));
+    await waitFor(() =>
+      expect(screen.getByTestId('mines-current')).toHaveTextContent('1.13×'),
+    );
+
+    await userEvent.click(screen.getByLabelText('Cell 2'));
+
+    expect(await screen.findByText(/busted/i)).toBeInTheDocument();
+    // A loss credits nothing → the cashout multiplier is cleared, not left stale.
+    expect(screen.getByTestId('mines-current')).toHaveTextContent('—');
+    expect(screen.getByTestId('mines-current')).not.toHaveTextContent('1.13×');
+  });
+
   it('cashes out via action(roundId, cashout) and renders the server payout', async () => {
     const safe: GameStateProjection = {
       cell: 6,
