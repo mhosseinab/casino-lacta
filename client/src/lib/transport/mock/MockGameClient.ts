@@ -136,10 +136,11 @@ export class MockGameClient implements GameClient {
   // --- fabrication helpers (the make-believe, all confined here) ---------------- //
 
   private settle(gameId: string, input: BetRequest): BetObject {
-    const won = Math.random() < 0.49;
-    const multiplier = won ? 1 + Math.random() * 2 : 0;
-    const payoutMinor = Math.floor(input.stakeMinor * multiplier);
-    this.balanceMinor += payoutMinor - input.stakeMinor;
+    const outcome =
+      gameId === 'originals.dice'
+        ? this.fakeDice(input)
+        : this.fakeGeneric(input);
+    this.balanceMinor += (outcome.payoutMinor as number) - input.stakeMinor;
     const now = new Date().toISOString();
     return {
       betId: input.betId,
@@ -156,11 +157,44 @@ export class MockGameClient implements GameClient {
         nonce: Math.floor(Math.random() * 1_000_000),
       },
       input: input.input ?? {},
-      outcome: { demo: true, won, multiplier, payoutMinor },
+      outcome,
       createdAt: now,
       settledAt: now,
       idempotencyKeys: { settle: `demo-${input.betId}` },
     };
+  }
+
+  // Fabricate a contract-shaped DICE outcome (spec §A.1) so demo mode actually
+  // demonstrates the mechanic: a roll in [0,100), win per target/direction, and the
+  // matching (1−edge)/p multiplier. Still make-believe (no server seeds) — the real
+  // roll/payout always come from the server; this is confined to the demo quarantine.
+  private fakeDice(input: BetRequest): Record<string, unknown> {
+    const target = Number((input.input as { target?: number })?.target ?? 50);
+    const direction =
+      (input.input as { direction?: string })?.direction === 'UNDER'
+        ? 'UNDER'
+        : 'OVER';
+    const roll = Math.round(Math.random() * 10_000) / 100; // [0.00, 100.00)
+    const won = direction === 'OVER' ? roll > target : roll < target;
+    const winPct = direction === 'OVER' ? 100 - target : target;
+    const multiplier = won && winPct > 0 ? (1 - 0.01) / (winPct / 100) : 0;
+    const payoutMinor = Math.floor(input.stakeMinor * multiplier);
+    return {
+      demo: true,
+      roll,
+      target,
+      direction,
+      won,
+      multiplier,
+      payoutMinor,
+    };
+  }
+
+  private fakeGeneric(input: BetRequest): Record<string, unknown> {
+    const won = Math.random() < 0.49;
+    const multiplier = won ? 1 + Math.random() * 2 : 0;
+    const payoutMinor = Math.floor(input.stakeMinor * multiplier);
+    return { demo: true, won, multiplier, payoutMinor };
   }
 
   private demoId(prefix: string): string {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { parseStakeToMinor } from '../lib/money';
 
 // The shared stake input + Bet trigger (plan §3). A THIN renderer: it validates the
@@ -14,6 +14,9 @@ import { parseStakeToMinor } from '../lib/money';
 export function BetControls(props: {
   /** Parent runs the actual bet (GameClient.bet/spin) + balance refresh. */
   onBet: (stakeMinor: number) => void;
+  /** Notifies the parent of the current valid stake (minor units) or null if the
+   *  field is unparseable — drives previews like potential profit. Display-only. */
+  onStakeChange?: (stakeMinor: number | null) => void;
   /** Currency for stake parsing; GOLD is the only play-money currency. */
   currency?: string;
   /** Available balance, in minor units — drives the "max" quick-stake. The server
@@ -35,6 +38,14 @@ export function BetControls(props: {
   const parsed = parseStakeToMinor(stakeInput, currency);
   const currentMinor = parsed instanceof Error ? null : parsed;
 
+  // Surface the current stake to the parent for display-only previews (no money math
+  // here). Effect keeps it in sync with every edit / quick-stake without an extra
+  // call site. `onStakeChange` is read from props each render; deps are the value.
+  const { onStakeChange } = props;
+  useEffect(() => {
+    onStakeChange?.(currentMinor);
+  }, [currentMinor, onStakeChange]);
+
   function setMinor(value: number): void {
     setStakeInput(String(value));
     setLocalError(null);
@@ -53,10 +64,10 @@ export function BetControls(props: {
   const message = localError ?? props.rejectionReason ?? null;
 
   return (
-    <div style={{ display: 'grid', gap: 8, maxWidth: 320 }}>
+    <div style={{ display: 'grid', gap: 8 }}>
       <label style={{ display: 'grid', gap: 4 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.7 }}>
-          Stake ({currency})
+        <span style={{ fontSize: 12, fontWeight: 600, color: MUTED }}>
+          Bet Amount
         </span>
         <input
           type="text"
@@ -67,13 +78,7 @@ export function BetControls(props: {
             setStakeInput(e.target.value);
             setLocalError(null);
           }}
-          style={{
-            font: 'inherit',
-            padding: '6px 10px',
-            borderRadius: 6,
-            border: '1px solid rgba(127,127,127,0.4)',
-            fontVariantNumeric: 'tabular-nums',
-          }}
+          style={{ ...fieldStyle, width: '100%' }}
         />
       </label>
 
@@ -84,6 +89,7 @@ export function BetControls(props: {
             currentMinor !== null && setMinor(Math.floor(currentMinor / 2))
           }
           disabled={currentMinor === null}
+          style={chipStyle}
         >
           ½
         </button>
@@ -91,6 +97,7 @@ export function BetControls(props: {
           type="button"
           onClick={() => currentMinor !== null && setMinor(currentMinor * 2)}
           disabled={currentMinor === null}
+          style={chipStyle}
         >
           2×
         </button>
@@ -100,33 +107,57 @@ export function BetControls(props: {
             props.balanceMinor != null && setMinor(props.balanceMinor)
           }
           disabled={props.balanceMinor == null}
+          style={chipStyle}
         >
           Max
         </button>
       </div>
 
-      <button
-        type="button"
-        onClick={handleBet}
-        style={{
-          font: 'inherit',
-          fontWeight: 700,
-          padding: '8px 16px',
-          borderRadius: 6,
-          border: '1px solid currentColor',
-          background: 'transparent',
-          color: 'inherit',
-          cursor: 'pointer',
-        }}
-      >
+      <button type="button" onClick={handleBet} style={betButtonStyle}>
         Bet
       </button>
 
       {message !== null && (
-        <p role="alert" style={{ margin: 0, color: '#c0392b', fontSize: 13 }}>
+        <p role="alert" style={{ margin: 0, color: '#ff6b6b', fontSize: 13 }}>
           {message}
         </p>
       )}
     </div>
   );
 }
+
+const MUTED = '#8b93a7';
+
+const fieldStyle: React.CSSProperties = {
+  font: 'inherit',
+  padding: '10px 12px',
+  borderRadius: 8,
+  border: '1px solid #222a38',
+  background: '#0c1018',
+  color: '#e6e9ef',
+  fontVariantNumeric: 'tabular-nums',
+};
+
+const chipStyle: React.CSSProperties = {
+  font: 'inherit',
+  fontWeight: 600,
+  flex: 1,
+  padding: '6px 0',
+  borderRadius: 8,
+  border: '1px solid #222a38',
+  background: '#1b2230',
+  color: '#cdd3e0',
+  cursor: 'pointer',
+};
+
+const betButtonStyle: React.CSSProperties = {
+  font: 'inherit',
+  fontWeight: 800,
+  fontSize: 15,
+  padding: '12px 16px',
+  borderRadius: 8,
+  border: 'none',
+  background: '#1bd96a',
+  color: '#06210f',
+  cursor: 'pointer',
+};

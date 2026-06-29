@@ -47,8 +47,8 @@ Review routing: client/** + packages/** → `frontend-renderer-reviewer`; CI/dep
 | S7  | FairnessDrawer + verifier link | passed | 1 | cherry-picked → main | 1a14807 → cp 3732c25 | renders real disclosure; verifier URL is server-stamped (verifierUrl) rendered verbatim; demo/unavailable notice; 5 tests |
 | S8  | Shared BetControls + ResultPanel | passed | 1 | merged → main | 69f353c (merge 4b7f2ac) | BetControls(parseStakeToMinor, integer quick-stakes, rejectionReason prop) + ResultPanel(server-verbatim, FairnessDrawer wired); 10 tests. CARRY-FWD: ResultPanel assumes Dice-shaped outcome{multiplier,payoutMinor} — generalize for slots/table later |
 | S9  | Dice view (vertical slice) | passed | 3 | merged → main | 404d986+fix 21e3e04 (merge 57187c8) | reference pattern; closed S4 res.ok via typed BetRejectedError. CARRY-FWD: (a) PixiStage redraw seam = game stage captures app+ready flag, redraws in useEffect keyed on outcome, returns draw cleanup (S11–S24 contract, documented in DiceStage); (b) redraw keys on outcome VALUE — Plinko(S17)/Crash(S18)/slots must key on bet identity (betId/nonce) for repeated identical outcomes; (c) extract pure landing math + unit-test it per game; (d) generic transport-error UI state |
-| S10 | REVIEW GATE (human go) | **AWAITING HUMAN GO** | 0 | — | — | STOP. S1–S9 done, 70 tests green. Present seam/quarantine/BetControls/PixiStage/Fairness/Dice for sign-off. OPEN SCOPE DECISION for human: FairnessDrawer is post-bet only (no pre-bet serverSeedHash commit shown) — accept for v1 or add pre-bet commit? |
-| S11 | Limbo view | pending | 0 | — | — | touches registry.tsx |
+| S10 | REVIEW GATE (human go) | **PASSED (go given)** | 0 | — | — | 2026-06-29 human "go". Dice redesigned to Gamdom layout first; screenshots dropped in client/screenshot/ as inspiration. FairnessDrawer post-bet-only accepted for v1. |
+| S11 | Limbo view | in_progress | 0 | casino-client/main · wt cc-main | — | touches registry.tsx; ref client/screenshot/limbo.png |
 | S12 | Pocket Dice view | pending | 0 | — | — | touches registry.tsx |
 | S13 | Keno view | pending | 0 | — | — | touches registry.tsx |
 | S14 | Roulette 0–99 view (originals.roulette) | pending | 0 | — | — | touches registry.tsx |
@@ -174,3 +174,18 @@ P7 Polish & ship
   thin-renderer grep, and the redraw/test pattern. Open scope decision surfaced: fairness shown
   post-bet only. Do NOT dispatch S11+ until the human approves; fold any requested pattern changes
   back into S4–S9 first.
+- 2026-06-29: **S9 DICE REDESIGN (polish on the merged slice).** Reworked the Dice view to the
+  Gamdom layout the human supplied (left Manual/Auto bet panel, horizontal red/green threshold
+  slider with 0/25/50/75/100 ticks + draggable thumb, stats row Multiplier | Roll Over/Under(⇄) |
+  Win Chance, server-roll marker). Swapped the Pixi `DiceStage` for a DOM `DiceSlider` (a draggable
+  threshold IS a form control) — kept the S9 load-bearing ideas: pure unit-tested geometry
+  (`winRegion`/`diceResultLanding`), reduced-motion → immediate, marker keyed on betId. Added
+  `diceMath.ts` (pure preview quote; `DICE_PREVIEW_EDGE` = the single named client edge owner,
+  mirrors the server 1% default; authoritative multiplier/payout still come off `bet.outcome`).
+  Added a global `index.css` (the app had NO stylesheet → UA serif) = Poppins + system fallback +
+  dark canvas; made the mock dice-aware (quarantine file only). Verify @ working tree: tsc clean,
+  vitest **80/80 (17 files)**, biome clean, vite build OK; browser-confirmed a settled bet renders
+  (roll marker + colour + ResultPanel + balance re-fetch). Thin-renderer boundary held.
+- 2026-06-29: **✅ S10 GATE CLEARED — human "go" given** ("commit then go next step"; human also
+  dropped Gamdom reference screenshots in `client/screenshot/` as visual inspiration for the game
+  views). Proceeding to the post-gate Originals fan-out starting with **S11 Limbo**.
