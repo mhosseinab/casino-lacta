@@ -1,0 +1,36 @@
+/* Global base. The app had NO stylesheet, so it fell back to the UA serif — this
+ * sets the Gamdom-style geometric sans (Poppins, with a graceful system fallback so
+ * the offline static build still reads clean) plus the dark casino canvas. */
+:root {
+  --font-sans: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Ubuntu, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background: #0b0e14;
+  color: #e6e9ef;
+}
+
+button,
+input,
+select,
+textarea,
+output {
+  font-family: inherit;
+}

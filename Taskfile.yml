@@ -51,9 +51,12 @@ tasks:
       - uv run pytest -q
 
   contracts:
-    desc: Regenerate packages/contracts-ts from the API OpenAPI schema (wired in a later step).
+    desc: Regenerate packages/contracts-ts from the API OpenAPI schema (the client↔server seam).
     cmds:
-      - echo "contracts generation is wired in a later step"
+      # Dump the schema with no DB/running server — `app` is an installed uv package, so the
+      # FastAPI app object imports cleanly; uv build/download noise goes to stderr, JSON to stdout.
+      - uv run python -c "import json, app.main as m; print(json.dumps(m.app.openapi()))" > packages/contracts-ts/openapi.json
+      - pnpm exec openapi-typescript packages/contracts-ts/openapi.json -o packages/contracts-ts/src/schema.ts
 
   rtp:
     desc: The heavy RTP-as-CI gate (wired when the first game lands).
